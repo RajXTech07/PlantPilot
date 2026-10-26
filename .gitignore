@@ -45,3 +45,5 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+plantpilot-working-changes.patch
