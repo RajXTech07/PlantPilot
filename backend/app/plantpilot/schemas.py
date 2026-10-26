@@ -29,6 +29,29 @@ class ApprovalStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class Machine(BaseModel):
+    """Manufacturing asset / equipment."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(...)
+    product_id: str = Field(..., description="Matches AI4I 2020 dataset Product ID")
+    type: str = Field(..., description="L, M, or H type")
+    status: str = Field("active", description="active / maintenance / degraded / offline")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+
+class MachineCreate(BaseModel):
+    """Payload to register an industrial asset."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    product_id: str = Field(..., min_length=1)
+    type: str = Field(..., min_length=1, max_length=10)
+    id: Optional[str] = None
+    status: Optional[str] = "active"
+
+
 class EvidenceItem(BaseModel):
     """A single piece of evidence with explicit provenance."""
     model_config = ConfigDict(populate_by_name=True)
@@ -44,6 +67,18 @@ class EvidenceItem(BaseModel):
         ..., min_length=1, max_length=500, description="Tool / sensor / source"
     )
     value: Optional[Any] = Field(None, description="Numeric or structured value")
+    tool_execution_id: Optional[str] = Field(
+        None, description="Exact FK to tool_executions.id that produced this observation"
+    )
+    parameter_name: Optional[str] = Field(
+        None, description="Physical parameter (e.g. air_temperature, torque)"
+    )
+    numeric_value: Optional[float] = Field(
+        None, description="Typed numeric measurement"
+    )
+    unit: Optional[str] = Field(
+        None, description="Unit of measurement (K, Nm, rpm, min)"
+    )
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC time of observation or claim",
@@ -84,6 +119,15 @@ class Recommendation(BaseModel):
         ApprovalStatus.PENDING_APPROVAL
     )
     priority: str = Field("medium", description="low / medium / high")
+    reviewed_by: Optional[str] = Field(
+        None, description="Operator or engineer who reviewed this recommendation"
+    )
+    review_notes: Optional[str] = Field(
+        None, max_length=2000, description="Operator comments or rejection reasoning"
+    )
+    reviewed_at: Optional[datetime] = Field(
+        None, description="UTC timestamp when the review decision occurred"
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -104,6 +148,7 @@ class ToolExecution(BaseModel):
     )
     status: Status = Field(Status.COMPLETED)
     error_message: Optional[str] = Field(None, max_length=1000)
+    step_index: int = Field(0, ge=0, description="Bounded loop step index (0-based)")
     executed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -118,6 +163,7 @@ class IncidentCreate(BaseModel):
     description: str = Field(..., min_length=1, max_length=5000)
     severity: str = Field("medium", description="low / medium / high / critical")
     category: Optional[str] = Field("operational", max_length=200)
+    machine_id: Optional[str] = Field(None, description="Optional asset/machine ID")
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -129,6 +175,7 @@ class Incident(BaseModel):
     description: str
     severity: str
     category: Optional[str] = None
+    machine_id: Optional[str] = None
     status: Status = Field(Status.PENDING)
     created_at: datetime = Field(...)
     updated_at: datetime = Field(...)

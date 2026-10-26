@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from plantpilot.safety import RiskLevel, ToolRisk
+from .safety import RiskLevel, ToolRisk
 AGENT_PARAMS = {"air_temperature": "Air temperature [K]", "process_temperature": "Process temperature [K]", "rotational_speed": "Rotational speed [rpm]", "torque": "Torque [Nm]", "tool_wear": "Tool wear [min]"}
 
 

@@ -303,14 +303,16 @@ class AgentController:
                         result_str,
                         Status.COMPLETED,
                         None,
+                        step_index=step,
                     )
-                    # Record as observed evidence.
+                    # Record as observed evidence with exact provenance link.
                     evidence = EvidenceItem(
                         id=f"ev_{uuid.uuid4().hex[:12]}",
                         evidence_type=EvidenceType.OBSERVED,
                         description=f"Tool {tool_name} result",
                         source=tool_name,
                         value=result,
+                        tool_execution_id=exec_id,
                         verified=True,
                     )
                     self.db.save_evidence(investigation.id, evidence)
@@ -429,6 +431,7 @@ class AgentController:
         result: str,
         status: Status,
         error_message: Optional[str],
+        step_index: int = 0,
     ) -> None:
         """Persist a tool execution audit record."""
         execution = ToolExecution(
@@ -438,6 +441,7 @@ class AgentController:
             result=result,
             status=status,
             error_message=error_message,
+            step_index=step_index,
             executed_at=datetime.now(timezone.utc),
             input_size_bytes=len(json.dumps(arguments).encode("utf-8")),
             output_size_bytes=len(result.encode("utf-8")),

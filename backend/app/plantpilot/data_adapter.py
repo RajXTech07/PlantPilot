@@ -11,8 +11,13 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-# Dataset path relative to project root
-DEFAULT_CSV = Path(__file__).resolve().parents[2] / "ai4i2020.csv"
+# Dataset path relative to backend root (checks data/ directory first)
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CSV = (
+    (_BACKEND_ROOT / "data" / "ai4i2020.csv")
+    if (_BACKEND_ROOT / "data" / "ai4i2020.csv").exists()
+    else _BACKEND_ROOT / "ai4i2020.csv"
+)
 
 # Agent-facing sensor parameters (measurement columns only)
 AGENT_PARAMS = {
@@ -108,7 +113,7 @@ def get_sensor_readings(
         For unknown identifiers: raises DataAdapterError.
         For unsupported parameters: raises DataAdapterError.
     """
-    path = csv_path or DEFAULT_CSV
+    path = Path(csv_path) if csv_path else DEFAULT_CSV
     # Load once and cache? For simplicity reload per call (fast enough).
     # In production: cache loaded dataset in module or DB.
     try:
@@ -214,7 +219,7 @@ def get_evaluation_only(
     Does NOT expose labels to the agent-facing tool.
     For evaluation engine use only.
     """
-    path = csv_path or DEFAULT_CSV
+    path = Path(csv_path) if csv_path else DEFAULT_CSV
     try:
         all_rows = _load_csv(path)
     except DataAdapterError:

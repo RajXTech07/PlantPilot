@@ -154,3 +154,63 @@ def test_list_incidents_validation(client):
 
     response = client.get("/api/v1/incidents?offset=-1")
     assert response.status_code == 400
+
+
+def test_machines_api_endpoints(client):
+    """Test machine registration and retrieval via API."""
+    # Create machine
+    payload = {"product_id": "L47181", "type": "L", "status": "active"}
+    res = client.post("/api/v1/machines", json=payload)
+    assert res.status_code == 201
+    machine = res.json()
+    assert machine["product_id"] == "L47181"
+    assert machine["type"] == "L"
+    machine_id = machine["id"]
+
+    # Get single machine
+    res_get = client.get(f"/api/v1/machines/{machine_id}")
+    assert res_get.status_code == 200
+    assert res_get.json()["id"] == machine_id
+
+    # List machines
+    res_list = client.get("/api/v1/machines")
+    assert res_list.status_code == 200
+    assert len(res_list.json()) >= 1
+
+
+def test_recommendation_review_api_endpoint(client):
+    """Test operator reviewing a recommendation via API."""
+    import uuid
+    from plantpilot.storage import get_database
+    from plantpilot.schemas import IncidentCreate, InvestigationCreate, Recommendation, ApprovalStatus
+
+    db = get_database()
+    incident = db.create_incident(IncidentCreate(description="Review Test", severity="high"))
+    inv = db.create_investigation(InvestigationCreate(incident_id=incident.id), incident)
+    rec_id = f"rec_api_{uuid.uuid4().hex[:8]}"
+    rec = Recommendation(
+        id=rec_id,
+        title="Stop Spindle",
+        description="Emergency stop spindle",
+        requires_approval=True,
+        approval_status=ApprovalStatus.PENDING_APPROVAL,
+        priority="critical",
+    )
+    db.save_recommendation(inv.id, rec)
+
+    # Operator review call
+    response = client.post(
+        f"/api/v1/recommendations/{rec_id}/review",
+        json={
+            "status_choice": "approved",
+            "reviewed_by": "operator_alice",
+            "notes": "Emergency stop confirmed",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["approval_status"] == "approved"
+    assert data["reviewed_by"] == "operator_alice"
+    assert data["review_notes"] == "Emergency stop confirmed"
+    assert data["reviewed_at"] is not None
+

@@ -6,14 +6,16 @@ from datetime import datetime, timezone
 
 from plantpilot.storage import Database
 from plantpilot.schemas import (
-    IncidentCreate,
-    InvestigationCreate,
-    Status,
+    ApprovalStatus,
     EvidenceItem,
     EvidenceType,
     Hypothesis,
+    IncidentCreate,
+    InvestigationCreate,
+    Machine,
+    MachineCreate,
     Recommendation,
-    ApprovalStatus,
+    Status,
     ToolExecution,
 )
 
@@ -292,3 +294,126 @@ def test_database_persistence(tmp_path):
     assert retrieved is not None
     assert retrieved.id == incident_id
     db2.close()
+
+
+def test_machine_registry_crud(test_db):
+    """Test creating, getting, and listing machines."""
+    create = MachineCreate(product_id="M14860", type="M", status="active")
+    machine = test_db.create_machine(create)
+
+    assert machine.id.startswith("mach_")
+    assert machine.product_id == "M14860"
+    assert machine.type == "M"
+
+    retrieved = test_db.get_machine(machine.id)
+    assert retrieved is not None
+    assert retrieved.product_id == "M14860"
+
+    machines = test_db.list_machines()
+    assert len(machines) == 1
+    assert machines[0].product_id == "M14860"
+
+
+def test_hypothesis_evidence_junction_table(test_db):
+    """Test many-to-many junction table between hypotheses and evidence."""
+    incident = test_db.create_incident(IncidentCreate(description="Test", severity="high"))
+    inv = test_db.create_investigation(InvestigationCreate(incident_id=incident.id), incident)
+
+    ev1 = EvidenceItem(
+        id="ev_supp_1",
+        evidence_type=EvidenceType.OBSERVED,
+        description="High torque",
+        source="sensor_torque",
+        value=65.2,
+        verified=True,
+    )
+    ev2 = EvidenceItem(
+        id="ev_contra_1",
+        evidence_type=EvidenceType.OBSERVED,
+        description="Normal temperature",
+        source="sensor_temp",
+        value=298.1,
+        verified=True,
+    )
+    test_db.save_evidence(inv.id, ev1)
+    test_db.save_evidence(inv.id, ev2)
+
+    hyp = Hypothesis(
+        id="hyp_overload",
+        title="Torque Overload",
+        explanation="Torque exceeded normal range",
+        confidence="high",
+        supporting_evidence_ids=["ev_supp_1"],
+        contradicting_evidence_ids=["ev_contra_1"],
+    )
+    test_db.save_hypothesis(inv.id, hyp)
+
+    retrieved_inv = test_db.get_investigation(inv.id)
+    assert len(retrieved_inv.hypotheses) == 1
+    loaded_hyp = retrieved_inv.hypotheses[0]
+    assert loaded_hyp.supporting_evidence_ids == ["ev_supp_1"]
+    assert loaded_hyp.contradicting_evidence_ids == ["ev_contra_1"]
+
+
+def test_recommendation_human_review_audit(test_db):
+    """Test operator sign-off workflow on recommendations."""
+    incident = test_db.create_incident(IncidentCreate(description="Test", severity="medium"))
+    inv = test_db.create_investigation(InvestigationCreate(incident_id=incident.id), incident)
+
+    rec = Recommendation(
+        id="rec_inspect_01",
+        title="Inspect Milling Tool",
+        description="Check tool wear",
+        requires_approval=True,
+        approval_status=ApprovalStatus.PENDING_APPROVAL,
+        priority="high",
+    )
+    test_db.save_recommendation(inv.id, rec)
+
+    # Operator approves recommendation
+    reviewed = test_db.review_recommendation(
+        recommendation_id="rec_inspect_01",
+        approval_status=ApprovalStatus.APPROVED,
+        reviewed_by="operator_john",
+        review_notes="Tool wear physically verified > 200 min",
+    )
+
+    assert reviewed is not None
+    assert reviewed.approval_status == ApprovalStatus.APPROVED
+    assert reviewed.reviewed_by == "operator_john"
+    assert reviewed.review_notes == "Tool wear physically verified > 200 min"
+    assert reviewed.reviewed_at is not None
+
+    # Verify persistence
+    retrieved_inv = test_db.get_investigation(inv.id)
+    assert retrieved_inv.recommendations[0].approval_status == ApprovalStatus.APPROVED
+    assert retrieved_inv.recommendations[0].reviewed_by == "operator_john"
+
+
+def test_foreign_key_cascade_deletion(test_db):
+    """Test that deleting an incident cascades to investigation and child tables."""
+    incident = test_db.create_incident(IncidentCreate(description="Test", severity="high"))
+    inv = test_db.create_investigation(InvestigationCreate(incident_id=incident.id), incident)
+
+    ev = EvidenceItem(
+        id="ev_cascade_1",
+        evidence_type=EvidenceType.OBSERVED,
+        description="Reading",
+        source="sensor",
+        value=10.0,
+    )
+    test_db.save_evidence(inv.id, ev)
+
+    # Verify records exist
+    assert test_db.get_investigation(inv.id) is not None
+
+    # Delete incident
+    test_db._conn.execute("DELETE FROM incidents WHERE id = ?", (incident.id,))
+    test_db._conn.commit()
+
+    # Investigation must be cascade deleted
+    assert test_db.get_investigation(inv.id) is None
+    # Evidence must also be cascade deleted
+    rows = test_db._conn.execute("SELECT * FROM evidence WHERE id = ?", ("ev_cascade_1",)).fetchall()
+    assert len(rows) == 0
+

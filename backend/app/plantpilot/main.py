@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from . import __version__
 from .agent import create_agent_controller
 from .config import get_config, ConfigError
 from .schemas import (
+    ApprovalStatus,
     Incident,
     IncidentCreate,
     Investigation,
     InvestigationCreate,
     InvestigationResult,
+    Machine,
+    MachineCreate,
+    Recommendation,
 )
 from .storage import get_database
+
+
+class RecommendationReviewRequest(BaseModel):
+    """Payload for human operator reviewing a recommendation."""
+    status_choice: ApprovalStatus
+    reviewed_by: str
+    notes: Optional[str] = None
 
 
 @asynccontextmanager
@@ -203,6 +215,113 @@ async def get_investigation(investigation_id: str) -> Investigation:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve investigation: {type(exc).__name__}",
+        )
+
+
+@app.get("/api/v1/investigations", response_model=List[Investigation])
+async def list_investigations(limit: int = 50, offset: int = 0) -> List[Investigation]:
+    """List historical investigations."""
+    try:
+        db = get_database()
+        return db.list_investigations(limit=limit, offset=offset)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list investigations: {type(exc).__name__}",
+        )
+
+
+@app.post("/api/v1/machines", response_model=Machine, status_code=status.HTTP_201_CREATED)
+async def create_machine(create: MachineCreate) -> Machine:
+    """Register a new industrial machine / asset."""
+    try:
+        db = get_database()
+        machine = db.create_machine(create)
+        return machine
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create machine: {type(exc).__name__}",
+        )
+
+
+@app.get("/api/v1/machines", response_model=List[Machine])
+async def list_machines(limit: int = 50, offset: int = 0) -> List[Machine]:
+    """List registered industrial machines."""
+    try:
+        db = get_database()
+        return db.list_machines(limit=limit, offset=offset)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list machines: {type(exc).__name__}",
+        )
+
+
+@app.get("/api/v1/machines/{machine_id}", response_model=Machine)
+async def get_machine(machine_id: str) -> Machine:
+    """Retrieve details for a single machine."""
+    try:
+        db = get_database()
+        machine = db.get_machine(machine_id)
+        if machine is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Machine {machine_id!r} not found",
+            )
+        return machine
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve machine: {type(exc).__name__}",
+        )
+
+
+@app.post("/api/v1/recommendations/{recommendation_id}/review", response_model=Recommendation)
+async def review_recommendation(
+    recommendation_id: str,
+    review: RecommendationReviewRequest,
+) -> Recommendation:
+    """Operator sign-off: Approve or reject an AI investigation recommendation."""
+    try:
+        db = get_database()
+        updated = db.review_recommendation(
+            recommendation_id=recommendation_id,
+            approval_status=review.status_choice,
+            reviewed_by=review.reviewed_by,
+            review_notes=review.notes,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Recommendation {recommendation_id!r} not found",
+            )
+        return updated
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to review recommendation: {type(exc).__name__}",
+        )
+
+
+@app.get("/api/v1/recommendations", response_model=List[Recommendation])
+async def list_recommendations(
+    approval_status: Optional[ApprovalStatus] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Recommendation]:
+    """List recommendations pending operator sign-off or historically reviewed."""
+    try:
+        db = get_database()
+        return db.list_recommendations(approval_status=approval_status, limit=limit, offset=offset)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list recommendations: {type(exc).__name__}",
         )
 
 

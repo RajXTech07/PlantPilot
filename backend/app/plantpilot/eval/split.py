@@ -12,8 +12,15 @@ import random
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Set
 
-DATASET_PATH = (Path(__file__).resolve().parent.parent.parent / "ai4i2020.csv") if (Path(__file__).resolve().parent.parent.parent / "ai4i2020.csv").exists() else Path(__file__).resolve().parent.parent.parent.parent / "ai4i2020.csv"
-# Fallback: if not at parent-2, use project root
+_EVAL_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _EVAL_DIR.parent.parent.parent
+DATASET_PATH = (
+    (_BACKEND_DIR / "data" / "ai4i2020.csv")
+    if (_BACKEND_DIR / "data" / "ai4i2020.csv").exists()
+    else (_BACKEND_DIR / "ai4i2020.csv")
+    if (_BACKEND_DIR / "ai4i2020.csv").exists()
+    else _BACKEND_DIR.parent / "ai4i2020.csv"
+)
 SEED = 42
 
 
@@ -70,3 +77,16 @@ def get_label_distribution(rows: List[Dict], label_col: str = "Machine failure")
         v = int(r.get(label_col, 0))
         dist[v] = dist.get(v, 0) + 1
     return dist
+
+
+def stratified_split(
+    csv_path: str | Path | None = None,
+    train_fraction: float = 0.7,
+    dev_fraction: float = 0.15,
+    seed: int = SEED,
+) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    """Convenience helper to load dataset and return (train, dev, eval) stratified splits."""
+    path = Path(csv_path) if csv_path else DATASET_PATH
+    rows = load_dataset(path)
+    return split_dataset(rows, train_fraction=train_fraction, dev_fraction=dev_fraction, seed=seed)
+

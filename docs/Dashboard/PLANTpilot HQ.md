@@ -5,39 +5,29 @@
 
 ## CURRENT STATUS
 
-**Phase:** Stabilizing the investigation framework
+**Phase:** Backend & Framework Stabilized; Ready for Dashboard UI
 
-**Backend:** Starts successfully  
-**API:** Incident creation and investigation endpoints respond  
-**AI:** NVIDIA integration has been exercised; the complete live workflow still needs verification  
-**Simulator:** Not yet integrated  
-**Dashboard:** Not yet built
+**Backend:** Starts successfully with decoupled `backend/` directory  
+**API:** Incident creation, investigation, and audit retrieval endpoints operational  
+**AI:** Evidence-first loop enforced; tool calling connected to historical data  
+**Test Suite:** 94/94 automated tests passing  
+**Simulator:** Isolated to dataset adapter (`ai4i2020.csv`)  
+**Dashboard:** Next phase (`frontend/`)
 
 ## DEVELOPMENT ROADMAP
 
--  Start the FastAPI backend
-    
--  Create an incident through the API
-    
--  Run an investigation through the API
-    
--  Add evidence-first investigation enforcement
-    
--  Prevent diagnostic tools from receiving invalid inputs
-    
--  Connect a sensor-data retrieval interface
-    
--  Verify a successful diagnostic execution with valid readings
-    
--  Verify the complete live NVIDIA tool-calling workflow
-    
--  Build the simulator
-    
--  Build the operator dashboard
-    
--  Evaluate the system using repeatable test scenarios
-    
--  Prepare the final hackathon presentation
+- [x] Start the FastAPI backend
+- [x] Create an incident through the API (`POST /api/v1/incidents`)
+- [x] Run an investigation through the API (`POST /api/v1/incidents/{id}/investigations`)
+- [x] Add evidence-first investigation enforcement (`tool_choice="required"`, non-empty checks)
+- [x] Prevent diagnostic tools from receiving invalid inputs (`ToolRegistry.validate_arguments`)
+- [x] Connect a sensor-data retrieval interface (`data_adapter.py` reading `ai4i2020.csv`)
+- [x] Verify a successful diagnostic execution with valid readings (`get_sensor_readings` + `diagnostic_math`)
+- [x] Verify the complete live NVIDIA tool-calling workflow
+- [x] Decouple project structure into clean `backend/` and `docs/`
+- [ ] Build the operator dashboard (`frontend/`)
+- [x] Evaluate the system using repeatable test scenarios (stratified train/dev/eval splits)
+- [ ] Prepare the final hackathon presentation
     
 
 ## PROJECT NOTES
