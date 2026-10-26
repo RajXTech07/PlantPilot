@@ -13,7 +13,7 @@ PlantPilot is an **evidence-first, human-supervised industrial operations AI cop
 - **LLM:** `nvidia/nemotron-3.5-super-vl-120b-a12b` (configurable)
 - **Python:** ≥ 3.13
 - **Package Manager:** `uv`
-- **Status:** Backend stabilised (94 tests passing); frontend planned
+- **Status:** Backend stabilized (100 tests passing); frontend implemented (Streamlit operator dashboard)
 
 ---
 
@@ -38,7 +38,7 @@ PlantPilot/
 │   │       ├── split.py              # Reproducible stratified dataset split
 │   │       ├── metrics.py            # Binary classification metrics
 │   │       └── baseline.py           # Deterministic baseline predictor
-│   ├── tests/                        # 94 automated tests
+│   ├── tests/                        # 100 automated tests
 │   │   ├── conftest.py               # Global fixtures (state reset)
 │   │   ├── test_agent.py             # Agent controller unit tests
 │   │   ├── test_api.py               # FastAPI endpoint tests
@@ -64,7 +64,11 @@ PlantPilot/
 │   ├── Dashboard/PLANTpilot HQ.md
 │   ├── Development/DEVELOPMENT.md
 │   └── Experiments/EXPERIMENT & TEST RESULTS.md
-├── frontend/                         # Planned operator dashboard (empty)
+├── frontend/                         # Streamlit operator dashboard (8 views)
+│   ├── app.py                        # Streamlit main entrypoint & navigation
+│   ├── api_client.py                 # Backend API client
+│   ├── styles.css                    # Dark-mode styling
+│   └── views/                        # Overview, Incidents, Investigations, Approvals, Fleet, Detector, Eval, System Health
 ├── README.md                         # Project README
 ├── .gitignore                        # Git exclusions
 └── GEMINI.md                         # This file
@@ -461,7 +465,7 @@ uv run python test_nemotron.py
 
 ## 8. Testing
 
-### Test Suite Overview (94 tests)
+### Test Suite Overview (100 tests)
 
 | File | Tests | Category |
 |---|---|---|
