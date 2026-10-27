@@ -13,7 +13,7 @@ PlantPilot is an **evidence-first, human-supervised industrial operations AI cop
 - **LLM:** `nvidia/nemotron-3.5-super-vl-120b-a12b` (configurable)
 - **Python:** ≥ 3.13
 - **Package Manager:** `uv`
-- **Status:** Backend stabilized (100 tests passing); frontend implemented (Streamlit operator dashboard)
+- **Status:** Fully stabilized across all 4 phases (149 tests passing); frontend implemented (Streamlit operator dashboard with Digital Twin & What-If Simulator, Workforce Clearance Compliance, and Diagnostics Audit)
 
 ---
 
@@ -28,32 +28,41 @@ PlantPilot/
 │   │   ├── agent.py                  # Agent controller (bounded investigation loop)
 │   │   ├── config.py                 # Environment-based configuration
 │   │   ├── schemas.py                # Pydantic data models
-│   │   ├── storage.py                # SQLite persistence layer (859 lines)
-│   │   ├── tools.py                  # Tool registry & handlers
+│   │   ├── storage.py                # SQLite persistence layer (894 lines)
+│   │   ├── tools.py                  # Tool registry & handlers (including ML prediction & twin telemetry)
 │   │   ├── safety.py                 # Safety policy enforcement
 │   │   ├── data_adapter.py           # CSV-backed sensor data adapter
 │   │   ├── detector.py               # Multi-signal anomaly detector (IQR + heuristic)
+│   │   ├── detection.py              # Supervised ML failure risk inference (HistGradientBoosting + RandomForest)
+│   │   ├── digital_twin.py           # Digital twin store & isolated what-if simulation records
+│   │   ├── diagnostics.py            # Evidence sufficiency, report claims audit & test ranking
+│   │   ├── workforce.py              # Workforce records, attendance, clearance gating & fatigue review
 │   │   └── eval/                     # Evaluation engine (isolated from agent)
 │   │       ├── __init__.py
 │   │       ├── split.py              # Reproducible stratified dataset split
 │   │       ├── metrics.py            # Binary classification metrics
 │   │       └── baseline.py           # Deterministic baseline predictor
-│   ├── tests/                        # 100 automated tests
+│   ├── tests/                        # 149 automated tests
 │   │   ├── conftest.py               # Global fixtures (state reset)
 │   │   ├── test_agent.py             # Agent controller unit tests
 │   │   ├── test_api.py               # FastAPI endpoint tests
+│   │   ├── test_detection.py         # ML prediction & normalization tests
+│   │   ├── test_diagnostics.py       # Evidence sufficiency, report audit & ranking tests
+│   │   ├── test_digital_twin.py      # Digital twin store & isolation tests
 │   │   ├── test_eval_engine.py       # Evaluation engine tests
 │   │   ├── test_evidence_first.py    # Evidence-first workflow tests (largest)
 │   │   ├── test_integration_e2e.py   # End-to-end integration tests
 │   │   ├── test_safety.py            # Safety policy tests
 │   │   ├── test_schemas.py           # Pydantic schema validation tests
 │   │   ├── test_storage.py           # SQLite storage layer tests
-│   │   └── test_tools.py            # Tool registry & handler tests
+│   │   ├── test_tools.py             # Tool registry & handler tests
+│   │   └── test_workforce.py         # Workforce store, shift tracking & clearance tests
 │   ├── data/                         # Persistent data (gitignored DB)
 │   │   ├── plantpilot.db             # SQLite database
 │   │   ├── ai4i2020.csv              # Dataset (also at backend root)
 │   │   └── README.md                 # Data governance notes
 │   ├── ai4i2020.csv                  # Dataset (fallback location)
+
 │   ├── test_nemotron.py              # Standalone NVIDIA API integration script
 │   ├── pyproject.toml                # Dependencies & config
 │   ├── uv.lock                       # Lock file
@@ -193,6 +202,13 @@ All models use Pydantic v2 with `ConfigDict(populate_by_name=True)`.
 |---|---|---|---|
 | `get_sensor_readings` | `_sensor_data_handler` | `NONE` | Retrieves historical observation from AI4I 2020 by numeric UDI |
 | `diagnostic_math` | `_diagnostic_math_handler` | `NONE` | Computes summary stats (count, sum, mean, min, max, std_dev, variance) |
+| `predict_failure_risk` | `_predict_failure_risk_handler` | `NONE` | Supervised ML failure risk inference (HistGradientBoosting + RandomForest) |
+| `get_twin_telemetry` | `_twin_telemetry_handler` | `NONE` | Retrieves status and telemetry snapshots from Digital Twin store |
+| `assess_evidence_sufficiency` | `_assess_evidence_sufficiency_handler` | `NONE` | Evaluates evidence sufficiency and hypothesis verification deterministically |
+| `rank_diagnostic_tests` | `_rank_diagnostic_tests_handler` | `NONE` | Multi-criteria ranking of candidate physical and sensor diagnostic tests |
+| `verify_operator_clearance` | `_verify_operator_clearance_handler` | `NONE` | Validates plant personnel operational clearance levels (L1, L2, L3, L4) |
+
+
 
 **`ToolRegistry` Features:**
 - `validate_arguments()` — enforces JSON schema: required fields, type checks, `enum` constraints, `minItems`, `additionalProperties`, and input size limits
@@ -288,6 +304,14 @@ All endpoints are prefixed with `/api/v1/`.
 | `GET` | `/api/v1/machines` | `?limit=50&offset=0` | `List[Machine]` | List machines |
 | `GET` | `/api/v1/machines/{id}` | — | `Machine` | Get single machine |
 | `POST` | `/api/v1/recommendations/{id}/review` | `RecommendationReviewRequest` | `Recommendation` | Operator approve/reject |
+| `POST` | `/api/v1/twins` | `DigitalTwinCreate` | `DigitalTwin` (201) | Register digital twin |
+| `GET` | `/api/v1/twins` | `?limit=50` | `List[DigitalTwin]` | List digital twins |
+| `GET` | `/api/v1/twins/{id}` | — | `DigitalTwin` | Get twin with latest reading |
+| `GET` | `/api/v1/twins/{id}/history` | `?limit=100` | `List[TwinReadingItem]` | Get twin telemetry history |
+| `POST` | `/api/v1/twins/{id}/readings` | `TwinReadingCreate` | `TwinReadingItem` (201) | Push observed telemetry with auto-risk |
+| `POST` | `/api/v1/twins/{id}/simulate` | `TwinSimulationRequest` | `TwinReadingItem` | Run isolated what-if simulation |
+| `POST` | `/api/v1/predict-risk` | `PredictRiskRequest` | `FailureRiskPrediction` | Standalone ML failure risk inference |
+
 
 **Notable:**
 - Investigation endpoint is **synchronous** — runs the entire agent loop before responding
@@ -465,19 +489,23 @@ uv run python test_nemotron.py
 
 ## 8. Testing
 
-### Test Suite Overview (100 tests)
+### Test Suite Overview (149 tests)
 
 | File | Tests | Category |
 |---|---|---|
-| `test_agent.py` | Agent controller unit tests | Mocked OpenAI client |
-| `test_api.py` | FastAPI endpoint tests | HTTP-level testing |
-| `test_eval_engine.py` | Evaluation engine | Split, metrics, baseline |
-| `test_evidence_first.py` | Evidence-first workflow | Largest test file — workflow invariants |
-| `test_integration_e2e.py` | E2E integration | Real CSV + real tools + real SQLite, mocked provider only |
-| `test_safety.py` | Safety policy | Risk levels, tool permissions |
-| `test_schemas.py` | Pydantic schemas | Validation, enums, field constraints |
-| `test_storage.py` | SQLite storage | CRUD, migrations, FK enforcement |
-| `test_tools.py` | Tool registry | Argument validation, execution, error handling |
+| `test_agent.py` | 9 | Agent controller unit tests (mocked provider, loop invariants, evidence verification) |
+| `test_api.py` | 21 | FastAPI endpoints (Incidents, Machines, Approvals, Twins, Risk, Diagnostics, Workforce, Clearance) |
+| `test_detection.py` | 8 | ML failure risk inference (HistGradientBoosting + RandomForest normalization) |
+| `test_diagnostics.py` | 6 | Evidence sufficiency assessment, report claim audits, next-test ranking |
+| `test_digital_twin.py` | 5 | Digital twin store, isolated what-if simulation, state rollback |
+| `test_eval_engine.py` | 6 | Split reproducibility, metrics computation, deterministic baseline |
+| `test_evidence_first.py` | 21 | Evidence-first workflow invariants, label quarantine & strict governance |
+| `test_integration_e2e.py` | 11 | E2E integration: real CSV + real tools + real SQLite, mocked provider only |
+| `test_safety.py` | 6 | Pure Python safety policy, risk levels, auto-approval whitelisting |
+| `test_schemas.py` | 13 | Pydantic v2 schemas validation, enums, field constraints |
+| `test_storage.py` | 20 | SQLite storage CRUD, foreign key enforcement, migrations |
+| `test_tools.py` | 16 | Tool registry, argument validation, ML and diagnostic tool handlers |
+| `test_workforce.py` | 7 | Workforce store, shift tracking, clearance gating & model-assisted fatigue review |
 
 ### Test Fixtures
 - **`conftest.py`:** Auto-use fixture `reset_state()` clears cached `_config` and `_db` singletons before/after each test
