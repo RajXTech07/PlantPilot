@@ -229,6 +229,30 @@ class InvestigationResult(BaseModel):
     completed: bool = Field(False)
 
 
+class InvestigationState(BaseModel):
+    """Structured in-memory investigation state tracking budget, evidence, and hypotheses."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    investigation_id: str = Field(...)
+    incident_id: str = Field(...)
+    target_machine_id: Optional[str] = Field(None)
+    status: Status = Field(Status.IN_PROGRESS)
+    initial_observations: List[str] = Field(default_factory=list)
+    collected_evidence: List[EvidenceItem] = Field(default_factory=list)
+    verified_evidence: List[EvidenceItem] = Field(default_factory=list)
+    unverified_evidence: List[EvidenceItem] = Field(default_factory=list)
+    candidate_hypotheses: List[Hypothesis] = Field(default_factory=list)
+    supporting_evidence_map: Dict[str, List[str]] = Field(default_factory=dict)
+    contradicting_evidence_map: Dict[str, List[str]] = Field(default_factory=dict)
+    unresolved_questions: List[str] = Field(default_factory=list)
+    diagnostic_tests_performed: List[Dict[str, Any]] = Field(default_factory=list)
+    recommendations: List[Recommendation] = Field(default_factory=list)
+    stopping_condition: Optional[str] = Field(None)
+    budget: Dict[str, int] = Field(default_factory=dict)
+    final_conclusions: List[str] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+
+
 class DigitalTwinCreate(BaseModel):
     """Payload to register a software digital twin."""
     model_config = ConfigDict(populate_by_name=True)
@@ -482,6 +506,109 @@ class WorkforceReviewResponse(BaseModel):
     analysis_mode: str = Field(...)
     deterministic_findings: Dict[str, Any] = Field(...)
     model_review: Dict[str, Any] = Field(...)
+
+
+class ProofOrRefuseRequest(BaseModel):
+    """Payload to evaluate evidence sufficiency under Proof-or-Refuse rules."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    hypotheses: List[Dict[str, Any]] = Field(default_factory=list)
+    incident: Optional[Dict[str, Any]] = None
+    required_evidence: Optional[List[str]] = None
+
+
+class ProofOrRefuseResponse(BaseModel):
+    """Deterministic proof-or-refuse outcome and next steps."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    diagnosis_status: str
+    outcome: str
+    is_refused: bool
+    refusal_reasons: List[str] = Field(default_factory=list)
+    verified_evidence_count: int = 0
+    missing_evidence: List[str] = Field(default_factory=list)
+    contradictions: List[Dict[str, Any]] = Field(default_factory=list)
+    ambiguous_causes: List[str] = Field(default_factory=list)
+    evaluated_hypotheses: List[Dict[str, Any]] = Field(default_factory=list)
+    useful_next_steps: List[str] = Field(default_factory=list)
+    message: str
+
+
+class InvestigationAuditResponse(BaseModel):
+    """Report audit results for an existing investigation record."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str
+    investigation_id: str
+    claims_checked: int
+    supported_claims: int
+    flagged_claims: int
+    claims: List[Dict[str, Any]] = Field(default_factory=list)
+    limitations: List[str] = Field(default_factory=list)
+
+
+class ShiftScheduleCreate(BaseModel):
+    """Payload to register a planned shift schedule."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    shift_name: str
+    shift_date: str
+    start_time: str
+    end_time: str
+    machine_id: Optional[str] = None
+    department: str
+    required_roles: List[str] = Field(default_factory=list)
+    min_headcount: int = 1
+    min_clearance: str = "L1"
+    assigned_worker_ids: List[str] = Field(default_factory=list)
+
+
+class ShiftHandoverCreate(BaseModel):
+    """Payload to log a shift-to-shift handover."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    shift_date: str
+    shift_name: str
+    machine_id: Optional[str] = None
+    outgoing_worker_id: str
+    incoming_worker_id: str
+    notes: str = ""
+    verified: bool = False
+
+
+class WorkOrderCreate(BaseModel):
+    """Payload to create an industrial maintenance work order."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    machine_id: str
+    task_description: str
+    assigned_worker_ids: List[str] = Field(default_factory=list)
+    required_qualifications: List[str] = Field(default_factory=list)
+    required_clearance: str = "L1"
+    scheduled_start: str
+    scheduled_end: str
+    inspection_required: bool = True
+
+
+class WorkOrderCompleteRequest(BaseModel):
+    """Payload to mark maintenance complete with inspector verification."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    actual_end: str
+    inspector_id: Optional[str] = None
+    inspection_evidence: Optional[Dict[str, Any]] = None
+
+
+class WorkforceCorrelateRequest(BaseModel):
+    """Payload to correlate workforce events with an operational incident."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    incident_id: str
+    machine_id: Optional[str] = None
+    incident_time: Optional[str] = None
+    window_hours: float = 48.0
+
 
 
 

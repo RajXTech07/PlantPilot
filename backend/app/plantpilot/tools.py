@@ -297,8 +297,39 @@ def _verify_operator_clearance_handler(arguments: Dict[str, Any]) -> Dict[str, A
         raise ToolError(str(exc))
     except ValueError as exc:
         raise ToolError(str(exc))
+def _correlate_workforce_incident_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .workforce import get_workforce_store
+    incident_id = str(arguments.get("incident_id", "")).strip()
+    if not incident_id:
+        raise ToolError("incident_id is required")
+    machine_id = arguments.get("machine_id")
+    incident_time = arguments.get("incident_time")
+    window_hours = float(arguments.get("window_hours", 48.0))
+    try:
+        store = get_workforce_store()
+        corr = store.correlate_incident(
+            incident_id=incident_id,
+            machine_id=machine_id,
+            incident_time=incident_time,
+            window_hours=window_hours,
+        )
+        return corr.model_dump()
     except Exception as exc:
-        raise ToolError(f"Clearance check failed: {exc}")
+        raise ToolError(f"Workforce correlation failed: {exc}")
+
+
+def _get_work_orders_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .workforce import get_workforce_store
+    machine_id = str(arguments.get("machine_id", "")).strip()
+    if not machine_id:
+        raise ToolError("machine_id is required")
+    limit = int(arguments.get("limit", 10))
+    try:
+        store = get_workforce_store()
+        orders = store.list_work_orders(machine_id=machine_id, limit=limit)
+        return {"machine_id": machine_id, "work_order_count": len(orders), "work_orders": orders}
+    except Exception as exc:
+        raise ToolError(f"Failed to retrieve work orders: {exc}")
 
 
 def _build_default_registry() -> ToolRegistry:
@@ -542,6 +573,74 @@ def _build_default_registry() -> ToolRegistry:
                     },
                 },
                 "required": ["worker_id", "required_level"],
+                "additionalProperties": False,
+            },
+            max_input_bytes=2000,
+        )
+    )
+
+    # Workforce timeline and maintenance correlation
+    registry.register(
+        Tool(
+            name="correlate_workforce_incident",
+            description=(
+                "Correlate plant workforce records, recent maintenance work orders, technician clearance, "
+                "and shift handovers around an operational incident timeline."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_correlate_workforce_incident_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "incident_id": {
+                        "type": "string",
+                        "description": "Unique identifier of the operational incident to correlate.",
+                    },
+                    "machine_id": {
+                        "type": "string",
+                        "description": "Optional machine identifier (e.g. mach_xxx or product_id).",
+                    },
+                    "incident_time": {
+                        "type": "string",
+                        "description": "Optional ISO-8601 incident timestamp (defaults to incident creation time).",
+                    },
+                    "window_hours": {
+                        "type": "number",
+                        "description": "Lookback time window in hours prior to the incident (default 48.0).",
+                    },
+                },
+                "required": ["incident_id"],
+                "additionalProperties": False,
+            },
+            max_input_bytes=2000,
+        )
+    )
+
+    # Machine maintenance work order inspection history
+    registry.register(
+        Tool(
+            name="get_work_orders_for_machine",
+            description=(
+                "Retrieve recent maintenance work orders, inspection evidence, and verification outcomes "
+                "for a specific machine asset."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_get_work_orders_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "machine_id": {
+                        "type": "string",
+                        "description": "Machine asset identifier (e.g. mach_xxx).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of recent work orders to return (default 10).",
+                    },
+                },
+                "required": ["machine_id"],
                 "additionalProperties": False,
             },
             max_input_bytes=2000,

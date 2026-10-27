@@ -1,6 +1,8 @@
-"""Pytest configuration and fixtures for PlantPilot tests."""
-
+import os
 import pytest
+
+# Ensure deterministic and mocked tests run without requiring a live NVIDIA API key
+os.environ.setdefault("NVIDIA_API_KEY", "mock-test-key-for-deterministic-tests")
 
 from plantpilot.config import reset_config
 from plantpilot.storage import reset_database

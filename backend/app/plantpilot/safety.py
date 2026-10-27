@@ -186,4 +186,20 @@ def default_safety_policy() -> SafetyPolicy:
             description="Verify worker operational clearance level - read-only deterministic",
         )
     )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="correlate_workforce_incident",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Correlate plant workforce and maintenance records with incident timeline - read-only",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="get_work_orders_for_machine",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Retrieve recent maintenance work orders and inspection outcomes - read-only",
+        )
+    )
     return policy

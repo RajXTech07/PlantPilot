@@ -85,15 +85,28 @@ class Config:
         """Create the data directory if it does not exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def has_api_key(self) -> bool:
+        return bool(self.nvidia_api_key and self.nvidia_api_key != "mock-test-key-for-deterministic-tests")
 
-def load_config() -> Config:
+    def require_api_key(self) -> str:
+        """Ensure a real NVIDIA API key is available, or raise ConfigError."""
+        if not self.nvidia_api_key or self.nvidia_api_key == "mock-test-key-for-deterministic-tests":
+            raise ConfigError(
+                "NVIDIA_API_KEY is not set. Create a .env file or export the "
+                "variable before starting PlantPilot."
+            )
+        return self.nvidia_api_key
+
+
+def load_config(require_api_key: bool = False) -> Config:
     """Build a :class:`Config` from the current environment.
 
-    The NVIDIA API key is required. If it is absent, raise
-    :class:`ConfigError` rather than silently using an empty string.
+    Allows running deterministic components, databases, and tests without
+    requiring an active NVIDIA API key.
     """
-    api_key = os.environ.get("NVIDIA_API_KEY")
-    if not api_key:
+    api_key = os.environ.get("NVIDIA_API_KEY", "")
+    if require_api_key and not api_key:
         raise ConfigError(
             "NVIDIA_API_KEY is not set. Create a .env file or export the "
             "variable before starting PlantPilot."

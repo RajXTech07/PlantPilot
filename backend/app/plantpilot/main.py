@@ -44,9 +44,23 @@ from .schemas import (
     WorkforceAnomaliesRequest,
     WorkforceFindingsResponse,
     WorkforceReviewResponse,
+    ProofOrRefuseRequest,
+    ProofOrRefuseResponse,
+    InvestigationAuditResponse,
+    ShiftScheduleCreate,
+    ShiftHandoverCreate,
+    WorkOrderCreate,
+    WorkOrderCompleteRequest,
+    WorkforceCorrelateRequest,
 )
 from .storage import get_database
-from .diagnostics import assess_diagnosis, audit_report, rank_next_tests
+from .diagnostics import (
+    assess_diagnosis,
+    audit_report,
+    audit_investigation_record,
+    proof_or_refuse_diagnosis,
+    rank_next_tests,
+)
 from .workforce import get_workforce_store, model_assess_workforce
 
 
@@ -254,6 +268,28 @@ async def list_investigations(limit: int = 50, offset: int = 0) -> List[Investig
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list investigations: {type(exc).__name__}",
         )
+
+
+@app.post("/api/v1/investigations/{investigation_id}/audit", response_model=InvestigationAuditResponse)
+async def audit_investigation_endpoint(investigation_id: str) -> InvestigationAuditResponse:
+    """Audit actual investigation output against real database records and physical constraints."""
+    db = get_database()
+    investigation = db.get_investigation(investigation_id)
+    if not investigation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Investigation {investigation_id!r} not found",
+        )
+    incident = db.get_incident(investigation.incident_id)
+    try:
+        result = audit_investigation_record(investigation=investigation, incident=incident)
+        return InvestigationAuditResponse(**result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Investigation audit failed: {exc}",
+        )
+
 
 
 @app.post("/api/v1/machines", response_model=Machine, status_code=status.HTTP_201_CREATED)
@@ -609,6 +645,25 @@ async def rank_tests_endpoint(request: RankTestsRequest) -> RankTestsResponse:
         )
 
 
+@app.post("/api/v1/diagnostics/proof-or-refuse", response_model=ProofOrRefuseResponse)
+async def proof_or_refuse_endpoint(request: ProofOrRefuseRequest) -> ProofOrRefuseResponse:
+    """Evaluate diagnostic claims under strict Proof-or-Refuse rules."""
+    try:
+        result = proof_or_refuse_diagnosis(
+            evidence=request.evidence,
+            hypotheses=request.hypotheses,
+            incident=request.incident,
+            required_evidence=request.required_evidence,
+        )
+        return ProofOrRefuseResponse(**result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Proof-or-Refuse evaluation failed: {exc}",
+        )
+
+
+
 # =========================================================
 # Workforce Endpoints
 # =========================================================
@@ -768,6 +823,145 @@ async def model_review_workforce_endpoint(request: Optional[WorkforceAnomaliesRe
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Model-assisted review failed: {exc}",
         )
+
+
+# --- Shift Schedules ---
+
+@app.post("/api/v1/workforce/shifts/schedules", status_code=status.HTTP_201_CREATED)
+async def create_shift_schedule_endpoint(payload: ShiftScheduleCreate) -> Dict[str, Any]:
+    """Register a planned shift schedule."""
+    store = get_workforce_store()
+    try:
+        return store.create_schedule(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@app.get("/api/v1/workforce/shifts/schedules")
+async def list_shift_schedules_endpoint(
+    shift_date: Optional[str] = None, machine_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List registered shift schedules."""
+    store = get_workforce_store()
+    return store.list_schedules(shift_date=shift_date, machine_id=machine_id)
+
+
+@app.get("/api/v1/workforce/shifts/schedules/{schedule_id}/coverage")
+async def check_shift_coverage_endpoint(schedule_id: str) -> Dict[str, Any]:
+    """Verify staffing coverage and clearance compliance for a planned shift."""
+    store = get_workforce_store()
+    try:
+        return store.verify_shift_coverage(schedule_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+# --- Shift Handovers ---
+
+@app.post("/api/v1/workforce/shifts/handovers", status_code=status.HTTP_201_CREATED)
+async def create_shift_handover_endpoint(payload: ShiftHandoverCreate) -> Dict[str, Any]:
+    """Record a shift-to-shift operational handover."""
+    store = get_workforce_store()
+    try:
+        return store.record_handover(payload.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@app.get("/api/v1/workforce/shifts/handovers")
+async def list_shift_handovers_endpoint(
+    shift_date: Optional[str] = None, machine_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """List recorded shift handovers."""
+    store = get_workforce_store()
+    return store.list_handovers(shift_date=shift_date, machine_id=machine_id)
+
+
+# --- Maintenance Work Orders ---
+
+@app.post("/api/v1/workforce/work-orders", status_code=status.HTTP_201_CREATED)
+async def create_work_order_endpoint(payload: WorkOrderCreate) -> Dict[str, Any]:
+    """Create an industrial maintenance work order."""
+    store = get_workforce_store()
+    try:
+        return store.create_work_order(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@app.get("/api/v1/workforce/work-orders")
+async def list_work_orders_endpoint(
+    machine_id: Optional[str] = None, status: Optional[str] = None, limit: int = 100
+) -> List[Dict[str, Any]]:
+    """List maintenance work orders."""
+    store = get_workforce_store()
+    return store.list_work_orders(machine_id=machine_id, status=status, limit=limit)
+
+
+@app.get("/api/v1/workforce/work-orders/{order_id}")
+async def get_work_order_endpoint(order_id: str) -> Dict[str, Any]:
+    """Retrieve details for a specific maintenance work order."""
+    store = get_workforce_store()
+    order = store.get_work_order(order_id)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Work order {order_id!r} not found",
+        )
+    return order
+
+
+@app.post("/api/v1/workforce/work-orders/{order_id}/complete")
+async def complete_work_order_endpoint(
+    order_id: str, payload: WorkOrderCompleteRequest
+) -> Dict[str, Any]:
+    """Record work order completion with inspection evidence verification."""
+    store = get_workforce_store()
+    try:
+        return store.record_completion(
+            order_id=order_id,
+            actual_end=payload.actual_end,
+            inspection_evidence=payload.inspection_evidence,
+            inspector_id=payload.inspector_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+# --- Incident Correlation ---
+
+@app.post("/api/v1/workforce/correlate")
+async def correlate_incident_endpoint(request: WorkforceCorrelateRequest) -> Dict[str, Any]:
+    """Correlate workforce shifts, handovers, and work orders with an operational incident."""
+    store = get_workforce_store()
+    try:
+        correlation = store.correlate_incident(
+            incident_id=request.incident_id,
+            machine_id=request.machine_id,
+            incident_time=request.incident_time,
+            window_hours=request.window_hours,
+        )
+        return correlation.model_dump()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Workforce correlation failed: {exc}",
+        )
+
 
 
 @app.exception_handler(ConfigError)

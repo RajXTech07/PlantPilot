@@ -1,6 +1,6 @@
 # PlantPilot — Codebase Reference (GEMINI.md)
 
-> **Purpose:** Persistent reference for AI-assisted development sessions. Consult this document first before inspecting source files. Last verified against the codebase on **2026-10-26**.
+> **Purpose:** Persistent reference for AI-assisted development sessions. Consult this document first before inspecting source files. Last verified against the codebase on **2026-10-27**.
 
 ---
 
@@ -13,7 +13,7 @@ PlantPilot is an **evidence-first, human-supervised industrial operations AI cop
 - **LLM:** `nvidia/nemotron-3.5-super-vl-120b-a12b` (configurable)
 - **Python:** ≥ 3.13
 - **Package Manager:** `uv`
-- **Status:** Fully stabilized across all 4 phases (149 tests passing); frontend implemented (Streamlit operator dashboard with Digital Twin & What-If Simulator, Workforce Clearance Compliance, and Diagnostics Audit)
+- **Status:** Fully stabilized across all 4 phases (**183 tests passing**, 100% pass rate); frontend implemented (Streamlit operator dashboard with Digital Twin & What-If Simulator, Workforce Clearance Compliance, and Diagnostics Audit)
 
 ---
 
@@ -25,25 +25,35 @@ PlantPilot/
 │   ├── app/plantpilot/               # Main Python package
 │   │   ├── __init__.py               # Package exports
 │   │   ├── main.py                   # FastAPI application & routes
-│   │   ├── agent.py                  # Agent controller (bounded investigation loop)
+│   │   ├── agent.py                  # Agent controller (bounded investigation loop & state tracking)
 │   │   ├── config.py                 # Environment-based configuration
 │   │   ├── schemas.py                # Pydantic data models
 │   │   ├── storage.py                # SQLite persistence layer (894 lines)
-│   │   ├── tools.py                  # Tool registry & handlers (including ML prediction & twin telemetry)
+│   │   ├── tools.py                  # Tool registry & handlers (telemetry, ML risk, twin, workforce)
 │   │   ├── safety.py                 # Safety policy enforcement
 │   │   ├── data_adapter.py           # CSV-backed sensor data adapter
 │   │   ├── detector.py               # Multi-signal anomaly detector (IQR + heuristic)
 │   │   ├── detection.py              # Supervised ML failure risk inference (HistGradientBoosting + RandomForest)
 │   │   ├── digital_twin.py           # Digital twin store & isolated what-if simulation records
-│   │   ├── diagnostics.py            # Evidence sufficiency, report claims audit & test ranking
-│   │   ├── workforce.py              # Workforce records, attendance, clearance gating & fatigue review
+│   │   ├── diagnostics.py            # Proof-or-refuse validator, self-auditing reports & next-best-test ranking
+│   │   ├── workforce.py              # Backward-compatible workforce facade
+│   │   ├── workforce/                # Modular Workforce Intelligence Subsystem
+│   │   │   ├── __init__.py           # Subsystem package exports
+│   │   │   ├── models.py             # Pydantic domain models (WorkerProfile, Attendance, Shifts, WorkOrders)
+│   │   │   ├── registry.py           # Worker registry & L1-L4 clearance gating
+│   │   │   ├── attendance.py         # Shift clocking, break deductions & overnight shift calculations
+│   │   │   ├── scheduling.py         # Shift schedules, coverage verification & handovers
+│   │   │   ├── maintenance.py        # Work order lifecycle & inspector evidence verification
+│   │   │   ├── analytics.py          # Operational anomaly detection & explainable rule findings
+│   │   │   ├── correlation.py        # Incident correlation across workers, maintenance & handovers
+│   │   │   └── service.py           # Unified service orchestrator & SQLite migrations
 │   │   └── eval/                     # Evaluation engine (isolated from agent)
 │   │       ├── __init__.py
 │   │       ├── split.py              # Reproducible stratified dataset split
 │   │       ├── metrics.py            # Binary classification metrics
 │   │       └── baseline.py           # Deterministic baseline predictor
-│   ├── tests/                        # 149 automated tests
-│   │   ├── conftest.py               # Global fixtures (state reset)
+│   ├── tests/                        # 183 automated tests (20 test modules)
+│   │   ├── conftest.py               # Global fixtures (state reset & test config)
 │   │   ├── test_agent.py             # Agent controller unit tests
 │   │   ├── test_api.py               # FastAPI endpoint tests
 │   │   ├── test_detection.py         # ML prediction & normalization tests
@@ -52,17 +62,23 @@ PlantPilot/
 │   │   ├── test_eval_engine.py       # Evaluation engine tests
 │   │   ├── test_evidence_first.py    # Evidence-first workflow tests (largest)
 │   │   ├── test_integration_e2e.py   # End-to-end integration tests
+│   │   ├── test_investigation_state.py # Investigation state, budget tracking & deduplication tests
+│   │   ├── test_next_best_test.py    # Next-Best-Test ranking, cost/risk penalty tests
+│   │   ├── test_proof_or_refuse.py   # Strict proof-or-refuse validator tests
+│   │   ├── test_report_auditing.py   # Self-auditing report grounding & causality tests
 │   │   ├── test_safety.py            # Safety policy tests
 │   │   ├── test_schemas.py           # Pydantic schema validation tests
 │   │   ├── test_storage.py           # SQLite storage layer tests
 │   │   ├── test_tools.py             # Tool registry & handler tests
-│   │   └── test_workforce.py         # Workforce store, shift tracking & clearance tests
+│   │   ├── test_workforce.py         # Legacy workforce facade tests
+│   │   ├── test_workforce_api.py     # Workforce & diagnostic REST endpoint tests
+│   │   ├── test_workforce_integration.py # Incident-workforce correlation & clearance gating tests
+│   │   └── test_workforce_modular.py # Modular workforce subsystem unit tests
 │   ├── data/                         # Persistent data (gitignored DB)
 │   │   ├── plantpilot.db             # SQLite database
 │   │   ├── ai4i2020.csv              # Dataset (also at backend root)
 │   │   └── README.md                 # Data governance notes
 │   ├── ai4i2020.csv                  # Dataset (fallback location)
-
 │   ├── test_nemotron.py              # Standalone NVIDIA API integration script
 │   ├── pyproject.toml                # Dependencies & config
 │   ├── uv.lock                       # Lock file
@@ -172,17 +188,22 @@ All models use Pydantic v2 with `ConfigDict(populate_by_name=True)`.
 - `EvidenceType`: `OBSERVED`, `DERIVED`, `HYPOTHESIS`, `SIMULATED`
 - `ApprovalStatus`: `PENDING_APPROVAL`, `APPROVED`, `REJECTED`
 
-### 4.3 `agent.py` — Agent Controller
+### 4.3 `agent.py` — Agent Controller & Investigation State
 
 - **Class:** `AgentController(db, tool_registry, safety_policy)`
 - **Factory:** `create_agent_controller(db=None)` — uses defaults
 - **Core method:** `investigate(investigation, incident) → InvestigationResult`
+- **State Model:** `InvestigationState` in-memory lifecycle manager:
+  - Tracks `active_hypotheses`, `verified_evidence_ids`, `contradicted_evidence_ids`, and `tool_call_count`
+  - Maintains `executed_signatures: Set[str]` to deduplicate redundant tool calls across reasoning steps
+  - Tracks strict step and tool call budgets (`has_budget()`)
+  - Supports dynamic hypothesis revision (`_revise_hypotheses_with_evidence`) as newly verified observations arrive
 
 **Investigation Loop Mechanics:**
 - Bounded to `max_steps` (default 8) iterations
 - Step 0 forces `tool_choice="required"` to ensure evidence gathering
 - Subsequent steps use `tool_choice="auto"`
-- Tool calls are validated, safety-checked, then executed
+- Tool calls are validated, safety-checked, deduplicated, then executed
 - **Evidence-first rule:** If no tool executes successfully → `INCOMPLETE`
 - **Retry:** Exactly 1 retry for transient `InternalServerError` (provider `500`), only in early steps with no tool calls yet
 - On successful completion: auto-generates a `Recommendation` (pending approval) and `Hypothesis` linked to evidence
@@ -207,6 +228,8 @@ All models use Pydantic v2 with `ConfigDict(populate_by_name=True)`.
 | `assess_evidence_sufficiency` | `_assess_evidence_sufficiency_handler` | `NONE` | Evaluates evidence sufficiency and hypothesis verification deterministically |
 | `rank_diagnostic_tests` | `_rank_diagnostic_tests_handler` | `NONE` | Multi-criteria ranking of candidate physical and sensor diagnostic tests |
 | `verify_operator_clearance` | `_verify_operator_clearance_handler` | `NONE` | Validates plant personnel operational clearance levels (L1, L2, L3, L4) |
+| `correlate_workforce_incident` | `_correlate_workforce_incident_handler` | `NONE` | Correlates machine incidents with active workers, unverified maintenance & shift handovers |
+| `get_work_orders_for_machine` | `_get_work_orders_for_machine_handler` | `NONE` | Retrieves maintenance work orders and inspection verification status for a machine |
 
 
 
@@ -285,11 +308,41 @@ Completely isolated from agent and investigation code.
 - **`metrics.py`:** `compute_metrics(predictions, actual)` → precision, recall, F1, confusion matrix
 - **`baseline.py`:** `baseline_predict(rows)` — deterministic rule: `tool_wear > 200 → 1, else 0`. Reports `F1 = 0.177`.
 
+### 4.10 `diagnostics.py` — Proof-or-Refuse, Report Audit & Next-Best-Test Engine
+
+- **Proof-or-Refuse Diagnosis (`proof_or_refuse_diagnosis`)**:
+  - Deterministic evaluation enforcing that no diagnosis is accepted without verified empirical observations.
+  - Distinguishes mere hypotheses from confirmed conclusions.
+  - Flags contradictory evidence across sensors (e.g. conflicting thermal readings).
+  - Flags ambiguous root causes when multiple mutually exclusive failure modes share identical symptoms without distinguishing measurements.
+  - Returns explicit refusal (`refused=True`) alongside actionable candidate next diagnostic tests.
+- **Self-Auditing Reports (`audit_report`, `audit_investigation_record`)**:
+  - Validates investigation findings and report claims directly against real SQLite database records.
+  - Cross-references machine IDs, numerical values, units, and executed tool call logs.
+  - Flags hallucinated sensor readings, claims citing failed tools as successful, unverified interventions, and unsupported causal assertions.
+- **Next-Best-Test Engine (`rank_next_tests`)**:
+  - Evaluates candidate diagnostic procedures based on information gain / diagnostic value, financial cost, duration, and safety risk.
+  - Penalizes already performed tests and previously failed attempts.
+  - Flags each test as `executable_by_system` / `is_executable_tool` (automated software tool call) vs. physical operator inspection requiring human clearance.
+
+### 4.11 `workforce/` — Modular Workforce Intelligence Subsystem
+
+Decoupled subsystem located in `backend/app/plantpilot/workforce/`:
+- **`models.py`**: Pydantic models for `WorkerProfile`, `AttendanceRecord`, `ShiftSchedule`, `ShiftHandover`, `WorkOrder`, `WorkforceFinding`, `WorkforceIncidentCorrelation`.
+- **`registry.py` (`WorkerRegistry`)**: Worker onboarding, certification validity checks, and strict `L1`-`L4` clearance level gating.
+- **`attendance.py` (`AttendanceTracker`)**: Clock-in/out, automatic break deduction, net working hours calculation, overnight shift calculation across midnight, and duplicate/overlapping clock-in prevention.
+- **`scheduling.py` (`ShiftScheduler`)**: Shift scheduling, staffing coverage calculation against actual attendance, and shift handover logging with safety notes.
+- **`maintenance.py` (`MaintenanceManager`)**: Work order lifecycle (`PENDING` -> `IN_PROGRESS` -> `COMPLETED`), overdue maintenance flagging, and unverified completion detection (mandating L2+ inspector sign-off).
+- **`analytics.py` (`WorkforceAnalytics`)**: Explainable, rule-based operational anomaly detection (excessive hours/fatigue, clearance mismatches, understaffing, overdue work orders).
+- **`correlation.py` (`IncidentCorrelator`)**: Correlates machine incidents with active workers, unverified maintenance orders, and shift handovers within configurable operational time windows, generating investigation evidence items.
+- **`service.py` (`WorkforceService`)**: Unified service orchestrator managing SQLite tables (`workforce_workers`, `workforce_attendance`, `workforce_schedules`, `workforce_handovers`, `workforce_orders`, `workforce_findings`, `workforce_correlations`) with automatic column migrations.
+- **`workforce.py`**: Backward-compatible public facade exporting `WorkforceStore`, `get_workforce_store`, `reset_workforce_store`, and `model_assess_workforce`.
+
 ---
 
 ## 5. API Endpoints
 
-All endpoints are prefixed with `/api/v1/`.
+All endpoints are prefixed with `/api/v1/` (except root and health).
 
 | Method | Path | Request Body | Response | Description |
 |---|---|---|---|---|
@@ -298,11 +351,14 @@ All endpoints are prefixed with `/api/v1/`.
 | `POST` | `/api/v1/incidents` | `IncidentCreate` | `Incident` (201) | Create incident |
 | `GET` | `/api/v1/incidents` | `?limit=50&offset=0` | `List[Incident]` | List incidents (newest first) |
 | `GET` | `/api/v1/incidents/{id}` | — | `Incident` | Get single incident |
-| `POST` | `/api/v1/incidents/{id}/investigations` | `InvestigationCreate` | `InvestigationResult` | Start AI investigation (synchronous) |
-| `GET` | `/api/v1/investigations/{id}` | — | `Investigation` | Get investigation with full details |
+| `POST` | `/api/v1/incidents/{id}/investigations` | `InvestigationCreate` | `InvestigationResult` | Start synchronous AI investigation |
+| `GET` | `/api/v1/investigations` | `?limit=50&offset=0` | `List[Investigation]` | List investigations |
+| `GET` | `/api/v1/investigations/{id}` | — | `Investigation` | Get investigation with full trace |
+| `POST` | `/api/v1/investigations/{id}/audit` | — | `InvestigationAuditResponse` | Audit investigation findings vs DB records |
 | `POST` | `/api/v1/machines` | `MachineCreate` | `Machine` (201) | Register machine |
 | `GET` | `/api/v1/machines` | `?limit=50&offset=0` | `List[Machine]` | List machines |
 | `GET` | `/api/v1/machines/{id}` | — | `Machine` | Get single machine |
+| `GET` | `/api/v1/recommendations` | `?limit=50&offset=0` | `List[Recommendation]` | List recommendations |
 | `POST` | `/api/v1/recommendations/{id}/review` | `RecommendationReviewRequest` | `Recommendation` | Operator approve/reject |
 | `POST` | `/api/v1/twins` | `DigitalTwinCreate` | `DigitalTwin` (201) | Register digital twin |
 | `GET` | `/api/v1/twins` | `?limit=50` | `List[DigitalTwin]` | List digital twins |
@@ -311,11 +367,33 @@ All endpoints are prefixed with `/api/v1/`.
 | `POST` | `/api/v1/twins/{id}/readings` | `TwinReadingCreate` | `TwinReadingItem` (201) | Push observed telemetry with auto-risk |
 | `POST` | `/api/v1/twins/{id}/simulate` | `TwinSimulationRequest` | `TwinReadingItem` | Run isolated what-if simulation |
 | `POST` | `/api/v1/predict-risk` | `PredictRiskRequest` | `FailureRiskPrediction` | Standalone ML failure risk inference |
-
+| `POST` | `/api/v1/diagnostics/assess` | `DiagnosisAssessRequest` | `DiagnosisAssessResponse` | Assess evidence sufficiency |
+| `POST` | `/api/v1/diagnostics/audit-report` | `ReportAuditRequest` | `ReportAuditResponse` | Audit claims in diagnostic report |
+| `POST` | `/api/v1/diagnostics/rank-tests` | `RankTestsRequest` | `RankTestsResponse` | Rank candidate next diagnostic tests |
+| `POST` | `/api/v1/diagnostics/proof-or-refuse` | `ProofOrRefuseRequest` | `ProofOrRefuseResponse` | Strict proof-or-refuse diagnosis validator |
+| `POST` | `/api/v1/workforce/workers` | `WorkerCreate` | `WorkerItem` (201) | Register plant worker |
+| `GET` | `/api/v1/workforce/workers` | `?limit=50&offset=0` | `List[WorkerItem]` | List registered workers |
+| `GET` | `/api/v1/workforce/workers/{id}` | — | `WorkerItem` | Get worker profile |
+| `POST` | `/api/v1/workforce/clock-in` | `ClockInRequest` | `AttendanceRecordItem` (201) | Clock worker into shift |
+| `POST` | `/api/v1/workforce/clock-out` | `ClockOutRequest` | `AttendanceRecordItem` | Clock worker out of shift |
+| `GET` | `/api/v1/workforce/workers/{id}/attendance` | — | `List[AttendanceRecordItem]` | Get worker attendance records |
+| `POST` | `/api/v1/workforce/clearance-check` | `ClearanceCheckRequest` | `ClearanceCheckResponse` | Verify operator clearance level |
+| `POST` | `/api/v1/workforce/detect-anomalies` | — | `WorkforceFindingsResponse` | Rule-based workforce fatigue/clearance anomalies |
+| `POST` | `/api/v1/workforce/model-review` | `WorkforceReviewRequest` | `WorkforceReviewResponse` | AI-assisted workforce review |
+| `POST` | `/api/v1/workforce/shifts/schedules` | `ShiftScheduleCreate` | `ShiftSchedule` (201) | Create planned shift schedule |
+| `GET` | `/api/v1/workforce/shifts/schedules` | `?limit=50&offset=0` | `List[ShiftSchedule]` | List planned shift schedules |
+| `GET` | `/api/v1/workforce/shifts/schedules/{id}/coverage` | — | `Dict[str, Any]` | Verify staffing coverage vs attendance |
+| `POST` | `/api/v1/workforce/shifts/handovers` | `ShiftHandoverCreate` | `ShiftHandover` (201) | Log shift handover notes |
+| `GET` | `/api/v1/workforce/shifts/handovers` | `?limit=50&offset=0` | `List[ShiftHandover]` | List shift handover logs |
+| `POST` | `/api/v1/workforce/work-orders` | `WorkOrderCreate` | `WorkOrder` (201) | Create maintenance work order |
+| `GET` | `/api/v1/workforce/work-orders` | `?limit=50&offset=0` | `List[WorkOrder]` | List maintenance work orders |
+| `GET` | `/api/v1/workforce/work-orders/{id}` | — | `WorkOrder` | Get maintenance work order by ID |
+| `POST` | `/api/v1/workforce/work-orders/{id}/complete` | `WorkOrderCompleteRequest` | `WorkOrder` | Complete work order with inspector verification |
+| `POST` | `/api/v1/workforce/correlate` | `WorkforceCorrelateRequest` | `WorkforceIncidentCorrelation` | Correlate incident with workforce events |
 
 **Notable:**
-- Investigation endpoint is **synchronous** — runs the entire agent loop before responding
-- `incident_id` in path must match body in investigation creation
+- Investigation endpoint is **synchronous** — runs the bounded agent loop before responding
+- All unit and regression tests run **100% deterministically without external API dependencies**
 - Limit range for list endpoints: `1–200`
 - `ConfigError` has a dedicated exception handler returning 500
 
@@ -489,7 +567,7 @@ uv run python test_nemotron.py
 
 ## 8. Testing
 
-### Test Suite Overview (149 tests)
+### Test Suite Overview (183 tests across 20 modules)
 
 | File | Tests | Category |
 |---|---|---|
@@ -501,11 +579,18 @@ uv run python test_nemotron.py
 | `test_eval_engine.py` | 6 | Split reproducibility, metrics computation, deterministic baseline |
 | `test_evidence_first.py` | 21 | Evidence-first workflow invariants, label quarantine & strict governance |
 | `test_integration_e2e.py` | 11 | E2E integration: real CSV + real tools + real SQLite, mocked provider only |
+| `test_investigation_state.py` | 5 | In-memory investigation state tracking, budget limits & call deduplication |
+| `test_next_best_test.py` | 3 | Next-Best-Test ranking, information gain, cost/risk penalty & tool executable flags |
+| `test_proof_or_refuse.py` | 5 | Strict proof-or-refuse validator, evidence sufficiency & contradiction detection |
+| `test_report_auditing.py` | 4 | Self-auditing report claims grounding vs DB records & causality validation |
 | `test_safety.py` | 6 | Pure Python safety policy, risk levels, auto-approval whitelisting |
 | `test_schemas.py` | 13 | Pydantic v2 schemas validation, enums, field constraints |
 | `test_storage.py` | 20 | SQLite storage CRUD, foreign key enforcement, migrations |
 | `test_tools.py` | 16 | Tool registry, argument validation, ML and diagnostic tool handlers |
-| `test_workforce.py` | 7 | Workforce store, shift tracking, clearance gating & model-assisted fatigue review |
+| `test_workforce.py` | 7 | Legacy workforce store facade, shift tracking, clearance gating & review |
+| `test_workforce_api.py` | 6 | Workforce REST API endpoints (schedules, coverage, handovers, work orders, complete, correlate) |
+| `test_workforce_integration.py` | 2 | Workforce incident correlation tool & clearance enforcement on critical actions |
+| `test_workforce_modular.py` | 9 | Modular workforce subsystem (registry, attendance, overnight shifts, maintenance, analytics) |
 
 ### Test Fixtures
 - **`conftest.py`:** Auto-use fixture `reset_state()` clears cached `_config` and `_db` singletons before/after each test
