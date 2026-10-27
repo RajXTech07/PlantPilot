@@ -13,7 +13,7 @@ PlantPilot is an **evidence-first, human-supervised industrial operations AI cop
 - **LLM:** `nvidia/nemotron-3.5-super-vl-120b-a12b` (configurable)
 - **Python:** ≥ 3.13
 - **Package Manager:** `uv`
-- **Status:** Fully stabilized across all 4 phases (**183 tests passing**, 100% pass rate); frontend implemented (Streamlit operator dashboard with Digital Twin & What-If Simulator, Workforce Clearance Compliance, and Diagnostics Audit)
+- **Status:** Fully stabilized across all 5 phases (**211 tests passing**, 100% pass rate); frontend implemented (Streamlit operator dashboard with Digital Twin & What-If Simulator, Workforce Clearance Compliance, Prognostics & Fragility Analysis, and Diagnostics Audit)
 
 ---
 
@@ -29,7 +29,7 @@ PlantPilot/
 │   │   ├── config.py                 # Environment-based configuration
 │   │   ├── schemas.py                # Pydantic data models
 │   │   ├── storage.py                # SQLite persistence layer (894 lines)
-│   │   ├── tools.py                  # Tool registry & handlers (telemetry, ML risk, twin, workforce)
+│   │   ├── tools.py                  # Tool registry & handlers (telemetry, ML risk, twin, workforce, prognostics, fragility)
 │   │   ├── safety.py                 # Safety policy enforcement
 │   │   ├── data_adapter.py           # CSV-backed sensor data adapter
 │   │   ├── detector.py               # Multi-signal anomaly detector (IQR + heuristic)
@@ -47,12 +47,33 @@ PlantPilot/
 │   │   │   ├── analytics.py          # Operational anomaly detection & explainable rule findings
 │   │   │   ├── correlation.py        # Incident correlation across workers, maintenance & handovers
 │   │   │   └── service.py           # Unified service orchestrator & SQLite migrations
-│   │   └── eval/                     # Evaluation engine (isolated from agent)
+│   │   ├── prognostics/              # Time to Breach & Physical Failure Subsystem
+│   │   │   ├── __init__.py           # Subsystem exports
+│   │   │   ├── models.py             # Schemas (ThresholdDefinition, ObservationItem, ForecastRequest/Response, PhysicalFailureRequest/Response)
+│   │   │   ├── threshold.py          # Threshold g(x) >= 0, safety margin m(x) = -g(x), crossing policies
+│   │   │   ├── forecasting.py        # Validated time-series models (linear drift, polynomial wear, thermal physics)
+│   │   │   ├── uncertainty.py        # Analytical parameter covariance & delta method prediction intervals
+│   │   │   ├── failure_model.py      # Physical degradation (Taylor tool life V*T^n = C, critical wear limit)
+│   │   │   └── service.py           # PrognosticsService coordinator & SQLite persistence
+│   │   ├── fragility/                # Operating Fragility Search Subsystem
+│   │   │   ├── __init__.py           # Subsystem exports
+│   │   │   ├── models.py             # Schemas (DisturbanceVariable, FragilitySearchRequest/Response, SensitivityRequest/Response)
+│   │   │   ├── objective.py          # Weighted normalized disturbance cost (L1/L2) & analytical gradient
+│   │   │   ├── constraints.py        # Domain box bounds & physical constraints (thermal, spindle power)
+│   │   │   ├── search.py             # Exact 1D analytical solution & multi-dimensional bounded coordinate search
+│   │   │   ├── sensitivity.py        # Single-parameter sensitivity ranking
+│   │   │   └── service.py           # FragilityService coordinator & SQLite persistence
+│   │   ├── evaluation/               # Deterministic Prognostics & Fragility Benchmark Runners
+│   │   │   ├── __init__.py           # Evaluation exports
+│   │   │   ├── prognostics_metrics.py# MAE, RMSE, false breach/non-breach rates, PICP, MPIW
+│   │   │   ├── fragility_metrics.py  # Feasibility rate, disturbance cost, optimality gap, evaluations used
+│   │   │   └── benchmark_runner.py   # Deterministic synthetic benchmark suites with ground-truth optima
+│   │   └── eval/                     # ML Evaluation engine (isolated from agent)
 │   │       ├── __init__.py
 │   │       ├── split.py              # Reproducible stratified dataset split
 │   │       ├── metrics.py            # Binary classification metrics
 │   │       └── baseline.py           # Deterministic baseline predictor
-│   ├── tests/                        # 183 automated tests (20 test modules)
+│   ├── tests/                        # 211 automated tests (24 test modules)
 │   │   ├── conftest.py               # Global fixtures (state reset & test config)
 │   │   ├── test_agent.py             # Agent controller unit tests
 │   │   ├── test_api.py               # FastAPI endpoint tests
@@ -230,6 +251,9 @@ All models use Pydantic v2 with `ConfigDict(populate_by_name=True)`.
 | `verify_operator_clearance` | `_verify_operator_clearance_handler` | `NONE` | Validates plant personnel operational clearance levels (L1, L2, L3, L4) |
 | `correlate_workforce_incident` | `_correlate_workforce_incident_handler` | `NONE` | Correlates machine incidents with active workers, unverified maintenance & shift handovers |
 | `get_work_orders_for_machine` | `_get_work_orders_for_machine_handler` | `NONE` | Retrieves maintenance work orders and inspection verification status for a machine |
+| `estimate_time_to_breach` | `_estimate_time_to_breach_handler` | `NONE` | Estimate operational or safety threshold breach time via trend extrapolation |
+| `evaluate_physical_failure_time` | `_evaluate_physical_failure_time_handler` | `NONE` | Evaluate physical equipment degradation failure time (Taylor tool life V*T^n = C) |
+| `search_operating_fragility` | `_search_operating_fragility_handler` | `NONE` | Find smallest feasible disturbance Delta x minimizing cost C(Delta x) causing threshold breach |
 
 
 
@@ -338,6 +362,45 @@ Decoupled subsystem located in `backend/app/plantpilot/workforce/`:
 - **`service.py` (`WorkforceService`)**: Unified service orchestrator managing SQLite tables (`workforce_workers`, `workforce_attendance`, `workforce_schedules`, `workforce_handovers`, `workforce_orders`, `workforce_findings`, `workforce_correlations`) with automatic column migrations.
 - **`workforce.py`**: Backward-compatible public facade exporting `WorkforceStore`, `get_workforce_store`, `reset_workforce_store`, and `model_assess_workforce`.
 
+### 4.12 `prognostics/` — Time to Breach & Physical Failure Estimation Subsystem
+
+Subsystem located in `backend/app/plantpilot/prognostics/`:
+- **Mathematical Threshold Formulation**: Evaluates $g(x) \ge 0$ as a breach condition where $g(x) = x - \text{threshold}$ (for $\ge$) or $g(x) = \text{threshold} - x$ (for $\le$). Safety margin is strictly defined as $m(x) = -g(x)$.
+- **Crossing Policies**:
+  - `FIRST_CROSSING`: Earliest instant where $g(x) \ge 0$.
+  - `SUSTAINED_CROSSING`: Breach condition maintained continuously for $\ge \tau_{\text{sustain}}$ seconds.
+  - `PERSISTENT_CROSSING`: Cumulative exceedance time $\sum \Delta t \ge T_{\text{crit}}$.
+- **Input Validation (`forecasting.py`)**: Rejects non-increasing timestamps, non-positive horizons, unrecognized units, and physical domain violations ($T < 0$ K, $\text{wear} < 0$).
+- **Extrapolation Models**:
+  - `linear_drift`: Robust least-squares drift extrapolation.
+  - `polynomial_wear`: Accelerated degradation $y(t) = a t^2 + b t + c$ for non-linear tool wear.
+  - `physics_thermal`: Newton cooling / heat accumulation towards asymptotic steady-state limit.
+- **Uncertainty Quantification (`uncertainty.py`)**: Analytical parameter covariance via delta method estimating $[t_{\text{lower}}, t_{\text{upper}}]$ at chosen confidence level (default 95%).
+- **Physical Failure vs. Threshold Crossing Separation (`failure_model.py`)**:
+  - **Fundamental rule**: Threshold crossing is an operational boundary, NOT physical equipment failure.
+  - Physical degradation evaluated via calibrated physical models (e.g. Taylor tool life $V \cdot T^n = C$).
+  - Refuses estimation with `UNSUPPORTED_TARGET` or `INADEQUATE_EVIDENCE` if physical parameters or speed are uncalibrated or out-of-domain.
+  - Handles right-censored observation sequences.
+- **Coordinator & Persistence (`service.py`)**: `PrognosticsService` persists complete immutable input records, parameters, and metadata into SQLite table `prognostics_forecasts`.
+
+### 4.13 `fragility/` — Operating Fragility Search Subsystem
+
+Subsystem located in `backend/app/plantpilot/fragility/`:
+- **Objective Formulation**: Smallest feasible disturbance solving:
+  $$\min_{\Delta x} \sum_{i=1}^d w_i \left|\frac{\Delta x_i}{s_i}\right|^p \quad \text{s.t.} \quad g(x_0 + \Delta x) \ge 0, \quad x_{\min} \le x_0 + \Delta x \le x_{\max}, \quad h_j(x_0 + \Delta x) \le 0$$
+- **Exact 1D Closed-Form Solution**: For 1D monotonic threshold crossing, $x^* = \text{threshold\_value}$ is an analytical global optimum (`VERIFIED_OPTIMUM`).
+- **Bounded Multi-Dimensional Search (`search.py`)**: Coordinate descent with line search enforcing physical box bounds and constraints, returning verified feasible candidates (`FEASIBLE_CANDIDATE_FOUND`), `BASELINE_ALREADY_BREACHED`, `INFEASIBLE`, or `BUDGET_EXHAUSTED`.
+- **Physical Constraints (`constraints.py`)**: Enforces domain bounds and coupled physical relationships (e.g. process temperature $T_{\text{proc}} \ge T_{\text{air}}$, spindle power $P \le P_{\max}$).
+- **Single-Variable Sensitivity Ranking (`sensitivity.py`)**: Evaluates and ranks individual operating variables by minimal normalized disturbance required to reach breach boundary.
+- **Coordinator & Persistence (`service.py`)**: `FragilityService` persists search configurations, disturbances, evaluations used, and limitations into SQLite table `fragility_searches`.
+
+### 4.14 `evaluation/` — Prognostics & Fragility Evaluation Benchmarks
+
+Subsystem located in `backend/app/plantpilot/evaluation/`:
+- **Prognostics Metrics (`prognostics_metrics.py`)**: MAE, RMSE, false positive/negative rates, PICP (Prediction Interval Coverage Probability), and MPIW (Mean Prediction Interval Width).
+- **Fragility Metrics (`fragility_metrics.py`)**: Feasibility rate, disturbance cost, optimality gap against analytical ground-truth, and computational evaluation budget.
+- **Deterministic Benchmark Runner (`benchmark_runner.py`)**: Synthetic benchmarks with analytical ground-truth solutions across linear drift and exact 1D fragility cases (seed=42, zero external network calls).
+
 ---
 
 ## 5. API Endpoints
@@ -388,8 +451,13 @@ All endpoints are prefixed with `/api/v1/` (except root and health).
 | `POST` | `/api/v1/workforce/work-orders` | `WorkOrderCreate` | `WorkOrder` (201) | Create maintenance work order |
 | `GET` | `/api/v1/workforce/work-orders` | `?limit=50&offset=0` | `List[WorkOrder]` | List maintenance work orders |
 | `GET` | `/api/v1/workforce/work-orders/{id}` | — | `WorkOrder` | Get maintenance work order by ID |
-| `POST` | `/api/v1/workforce/work-orders/{id}/complete` | `WorkOrderCompleteRequest` | `WorkOrder` | Complete work order with inspector verification |
 | `POST` | `/api/v1/workforce/correlate` | `WorkforceCorrelateRequest` | `WorkforceIncidentCorrelation` | Correlate incident with workforce events |
+| `POST` | `/api/v1/prognostics/forecast` | `ForecastRequest` | `ForecastResponse` | Estimate time-to-breach for operational/safety threshold |
+| `POST` | `/api/v1/prognostics/failure-time` | `PhysicalFailureRequest` | `PhysicalFailureResponse` | Evaluate physical equipment degradation failure time |
+| `POST` | `/api/v1/prognostics/benchmark` | `?num_cases=int` | `Dict[str, Any]` | Run synthetic benchmark for prognostics forecasting |
+| `POST` | `/api/v1/fragility/search` | `FragilitySearchRequest` | `FragilitySearchResponse` | Search smallest disturbance to reach threshold breach |
+| `POST` | `/api/v1/fragility/sensitivity` | `SensitivityAnalysisRequest` | `SensitivityAnalysisResponse` | Rank operating variables by fragility / vulnerability |
+| `POST` | `/api/v1/fragility/benchmark` | `?num_cases=int` | `Dict[str, Any]` | Run synthetic benchmark for fragility search |
 
 **Notable:**
 - Investigation endpoint is **synchronous** — runs the bounded agent loop before responding

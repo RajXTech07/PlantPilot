@@ -332,6 +332,39 @@ def _get_work_orders_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
         raise ToolError(f"Failed to retrieve work orders: {exc}")
 
 
+def _estimate_time_to_breach_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .prognostics import get_prognostics_service, ForecastRequest
+    try:
+        req = ForecastRequest.model_validate(arguments)
+        service = get_prognostics_service()
+        resp = service.generate_forecast(req)
+        return resp.model_dump()
+    except Exception as exc:
+        raise ToolError(f"Time-to-breach estimation failed: {exc}")
+
+
+def _evaluate_physical_failure_time_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .prognostics import get_prognostics_service, PhysicalFailureRequest
+    try:
+        req = PhysicalFailureRequest.model_validate(arguments)
+        service = get_prognostics_service()
+        resp = service.evaluate_physical_failure(req)
+        return resp.model_dump()
+    except Exception as exc:
+        raise ToolError(f"Physical failure time evaluation failed: {exc}")
+
+
+def _search_operating_fragility_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .fragility import get_fragility_service, FragilitySearchRequest
+    try:
+        req = FragilitySearchRequest.model_validate(arguments)
+        service = get_fragility_service()
+        resp = service.search_fragility(req)
+        return resp.model_dump()
+    except Exception as exc:
+        raise ToolError(f"Fragility search failed: {exc}")
+
+
 def _build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -644,6 +677,195 @@ def _build_default_registry() -> ToolRegistry:
                 "additionalProperties": False,
             },
             max_input_bytes=2000,
+        )
+    )
+
+    # Time to breach (prognostics) threshold extrapolation
+    registry.register(
+        Tool(
+            name="estimate_time_to_breach",
+            description=(
+                "Estimate when a defined operational, reliability, or safety threshold will be crossed "
+                "based on historical observations and time-series extrapolation. "
+                "Note: Threshold crossing does NOT equate to physical equipment failure."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_estimate_time_to_breach_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "asset_id": {
+                        "type": "string",
+                        "description": "Identifier of the asset or machine (e.g. 'mach_001').",
+                    },
+                    "observations": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Historical time-series observations in chronological order (at least 2 points).",
+                    },
+                    "threshold": {
+                        "type": "object",
+                        "description": "Threshold definition dictionary (parameter, operator, value, unit).",
+                    },
+                    "forecast_horizon_seconds": {
+                        "type": "number",
+                        "description": "Maximum forecast horizon in seconds (default 3600).",
+                    },
+                    "prediction_target": {
+                        "type": "string",
+                        "enum": [
+                            "threshold_breach",
+                            "operating_limit",
+                            "performance_threshold",
+                            "reliability_boundary",
+                            "safety_limit",
+                            "physical_failure",
+                        ],
+                        "description": "Category of threshold being monitored.",
+                    },
+                    "crossing_policy": {
+                        "type": "string",
+                        "enum": [
+                            "first_crossing",
+                            "sustained_crossing",
+                            "persistent_crossing",
+                        ],
+                    },
+                    "model_type": {
+                        "type": "string",
+                        "enum": ["linear_drift", "polynomial_wear", "physics_thermal"],
+                        "description": "Forecasting model family to use.",
+                    },
+                    "operating_conditions": {
+                        "type": "object",
+                    },
+                },
+                "required": [
+                    "asset_id",
+                    "observations",
+                    "threshold",
+                ],
+                "additionalProperties": False,
+            },
+            max_input_bytes=8000,
+        )
+    )
+
+    # Physical time to failure evaluation
+    registry.register(
+        Tool(
+            name="evaluate_physical_failure_time",
+            description=(
+                "Evaluate physical time-to-failure using domain degradation physics (e.g. Taylor tool life equation, critical wear limits). "
+                "Distinct from operational threshold crossing. Refuses with UNSUPPORTED_TARGET if parameters are uncalibrated."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_evaluate_physical_failure_time_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "asset_id": {
+                        "type": "string",
+                        "description": "Identifier of the machine asset.",
+                    },
+                    "observations": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Historical observations leading up to evaluation point.",
+                    },
+                    "failure_mode": {
+                        "type": "string",
+                        "description": "Physical failure mode (e.g. 'tool_wear_failure', 'heat_dissipation_failure').",
+                    },
+                    "degradation_model": {
+                        "type": "string",
+                        "description": "Physical degradation model (e.g. 'taylor_tool_life').",
+                    },
+                    "operating_speed_rpm": {
+                        "type": "number",
+                        "description": "Operating spindle speed in RPM.",
+                    },
+                    "calibrated_parameters": {
+                        "type": "object",
+                        "description": "Calibrated physical parameters (e.g. taylor_exponent, taylor_constant, critical_wear_limit).",
+                    },
+                    "censored_observation": {
+                        "type": "boolean",
+                    },
+                    "forecast_horizon_seconds": {
+                        "type": "number",
+                    },
+                },
+                "required": [
+                    "asset_id",
+                    "observations",
+                ],
+                "additionalProperties": False,
+            },
+            max_input_bytes=8000,
+        )
+    )
+
+    # Fragility search: smallest feasible disturbance causing threshold breach
+    registry.register(
+        Tool(
+            name="search_operating_fragility",
+            description=(
+                "Find the smallest feasible disturbance to operating conditions (temperatures, speed, torque) "
+                "that causes a threshold breach or failure condition. Evaluates physical feasibility constraints. "
+                "Note: Synthetic simulation results do not prove real-world fragility without empirical validation."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_search_operating_fragility_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "asset_id": {
+                        "type": "string",
+                        "description": "Identifier of the asset.",
+                    },
+                    "baseline_state": {
+                        "type": "object",
+                        "description": "Dictionary of baseline parameter names and numeric values.",
+                    },
+                    "threshold": {
+                        "type": "object",
+                        "description": "Breach threshold definition dictionary (parameter, operator, value, unit).",
+                    },
+                    "variables": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Search bounds and normalizers for perturbed variables (name, min_val, max_val, nominal_scale, weight).",
+                    },
+                    "cost_norm": {
+                        "type": "integer",
+                        "enum": [1, 2],
+                    },
+                    "constraints": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Optional physical constraints (e.g. process temp >= air temp, spindle power limit).",
+                    },
+                    "registered_model": {
+                        "type": "string",
+                    },
+                    "search_budget": {
+                        "type": "object",
+                        "description": "Search budget (max_evaluations, tolerance, max_iterations).",
+                    },
+                },
+                "required": [
+                    "asset_id",
+                    "baseline_state",
+                    "threshold",
+                    "variables",
+                ],
+                "additionalProperties": False,
+            },
+            max_input_bytes=8000,
         )
     )
     return registry

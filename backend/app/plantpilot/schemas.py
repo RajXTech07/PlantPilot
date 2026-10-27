@@ -610,5 +610,35 @@ class WorkforceCorrelateRequest(BaseModel):
     window_hours: float = 48.0
 
 
+# ---------------------------------------------------------
+# Prognostics & Fragility Schemas
+# ---------------------------------------------------------
+
+from .prognostics.models import (
+    CrossingPolicy,
+    ForecastRequest,
+    ForecastResponse,
+    ForecastStatus,
+    ObservationItem,
+    PhysicalFailureRequest,
+    PhysicalFailureResponse,
+    PredictionInterval,
+    PredictionTarget,
+    ThresholdDefinition,
+    ThresholdOperator,
+)
+from .fragility.models import (
+    DisturbanceVariable,
+    FragilitySearchRequest,
+    FragilitySearchResponse,
+    OptimalityStatus,
+    PhysicalConstraint,
+    SearchBudget,
+    SensitivityAnalysisRequest,
+    SensitivityAnalysisResponse,
+    SensitivityRankItem,
+)
+
+
 
 

@@ -202,4 +202,28 @@ def default_safety_policy() -> SafetyPolicy:
             description="Retrieve recent maintenance work orders and inspection outcomes - read-only",
         )
     )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="estimate_time_to_breach",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Estimate operational or safety threshold breach time via trend extrapolation - read-only",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="evaluate_physical_failure_time",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Evaluate physical equipment failure time via degradation models - read-only",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="search_operating_fragility",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Find minimum feasible disturbance to reach threshold breach in simulation - read-only",
+        )
+    )
     return policy

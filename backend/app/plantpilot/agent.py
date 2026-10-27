@@ -391,12 +391,18 @@ class AgentController:
                         step_index=step,
                     )
                     # Record evidence with exact provenance link.
-                    # Machine-learning predictive calculations are tagged as DERIVED, while sensor readings are OBSERVED.
-                    ev_type = (
-                        EvidenceType.DERIVED
-                        if tool_name == "predict_failure_risk"
-                        else EvidenceType.OBSERVED
-                    )
+                    # Machine-learning and analytical prognostic calculations are tagged as DERIVED,
+                    # search and digital-twin perturbations as SIMULATED, and sensor readings as OBSERVED.
+                    if tool_name in (
+                        "predict_failure_risk",
+                        "estimate_time_to_breach",
+                        "evaluate_physical_failure_time",
+                    ):
+                        ev_type = EvidenceType.DERIVED
+                    elif tool_name in ("search_operating_fragility", "simulate_digital_twin"):
+                        ev_type = EvidenceType.SIMULATED
+                    else:
+                        ev_type = EvidenceType.OBSERVED
                     evidence = EvidenceItem(
                         id=f"ev_{uuid.uuid4().hex[:12]}",
                         evidence_type=ev_type,

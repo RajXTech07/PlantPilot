@@ -52,6 +52,14 @@ from .schemas import (
     WorkOrderCreate,
     WorkOrderCompleteRequest,
     WorkforceCorrelateRequest,
+    ForecastRequest,
+    ForecastResponse,
+    PhysicalFailureRequest,
+    PhysicalFailureResponse,
+    FragilitySearchRequest,
+    FragilitySearchResponse,
+    SensitivityAnalysisRequest,
+    SensitivityAnalysisResponse,
 )
 from .storage import get_database
 from .diagnostics import (
@@ -62,6 +70,9 @@ from .diagnostics import (
     rank_next_tests,
 )
 from .workforce import get_workforce_store, model_assess_workforce
+from .prognostics import get_prognostics_service
+from .fragility import get_fragility_service
+from .evaluation import run_prognostics_synthetic_benchmark, run_fragility_synthetic_benchmark
 
 
 
@@ -960,6 +971,92 @@ async def correlate_incident_endpoint(request: WorkforceCorrelateRequest) -> Dic
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Workforce correlation failed: {exc}",
+        )
+
+
+# --- Prognostics & Time to Breach Endpoints ---
+
+@app.post("/api/v1/prognostics/forecast", response_model=ForecastResponse)
+async def forecast_time_to_breach_endpoint(request: ForecastRequest) -> ForecastResponse:
+    """Estimate time-to-breach for an operating, performance, reliability, or safety threshold."""
+    service = get_prognostics_service()
+    try:
+        return service.generate_forecast(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Forecast generation failed: {exc}",
+        )
+
+
+@app.post("/api/v1/prognostics/failure-time", response_model=PhysicalFailureResponse)
+async def evaluate_physical_failure_endpoint(request: PhysicalFailureRequest) -> PhysicalFailureResponse:
+    """Evaluate physical equipment failure time via degradation models (e.g. Taylor tool life).
+
+    Note: Distinct from operational threshold crossing. Refuses with UNSUPPORTED_TARGET
+    if physical parameters are uncalibrated or out-of-domain.
+    """
+    service = get_prognostics_service()
+    try:
+        return service.evaluate_physical_failure(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Physical failure evaluation failed: {exc}",
+        )
+
+
+@app.post("/api/v1/prognostics/benchmark")
+async def prognostics_benchmark_endpoint(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Execute synthetic benchmark suite for Time to Breach prognostics."""
+    num_cases = int(payload.get("num_cases", payload.get("n_runs", 30))) if payload else 30
+    try:
+        return run_prognostics_synthetic_benchmark(num_cases=num_cases)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Prognostics benchmark failed: {exc}",
+        )
+
+
+# --- Fragility Search Endpoints ---
+
+@app.post("/api/v1/fragility/search", response_model=FragilitySearchResponse)
+async def search_fragility_endpoint(request: FragilitySearchRequest) -> FragilitySearchResponse:
+    """Find the smallest feasible operating disturbance leading to threshold breach."""
+    service = get_fragility_service()
+    try:
+        return service.search_fragility(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Fragility search failed: {exc}",
+        )
+
+
+@app.post("/api/v1/fragility/sensitivity", response_model=SensitivityAnalysisResponse)
+async def sensitivity_analysis_endpoint(request: SensitivityAnalysisRequest) -> SensitivityAnalysisResponse:
+    """Rank operating variables by fragility sensitivity / vulnerability to threshold crossing."""
+    service = get_fragility_service()
+    try:
+        return service.run_sensitivity_analysis(request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Sensitivity analysis failed: {exc}",
+        )
+
+
+@app.post("/api/v1/fragility/benchmark")
+async def fragility_benchmark_endpoint(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Execute synthetic benchmark suite for Fragility Search algorithms."""
+    num_cases = int(payload.get("num_cases", payload.get("n_problems", 20))) if payload else 20
+    try:
+        return run_fragility_synthetic_benchmark(num_cases=num_cases)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Fragility benchmark failed: {exc}",
         )
 
 

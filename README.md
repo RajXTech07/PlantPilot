@@ -1,6 +1,6 @@
 # PlantPilot 🏭 — Evidence-First Industrial Operations AI Copilot
 
-[![Tests](https://img.shields.io/badge/Tests-183%2F183%20Passing-emerald?style=flat-square&logo=pytest)](backend/tests)
+[![Tests](https://img.shields.io/badge/Tests-211%2F211%20Passing-emerald?style=flat-square&logo=pytest)](backend/tests)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.13-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![Frontend](https://img.shields.io/badge/Frontend-Streamlit-FF4B4B?style=flat-square&logo=streamlit)](https://streamlit.io/)
@@ -21,9 +21,10 @@
 - [Knowledge Base & Docs Interconnection](#-knowledge-base--docs-interconnection)
 - [Operator Dashboard (Streamlit Frontend)](#-operator-dashboard-streamlit-frontend)
 - [FastAPI Backend & API Endpoints](#-fastapi-backend--api-endpoints)
+- [Prognostics & Fragility Search Subsystems](#-prognostics--fragility-search-subsystems)
 - [Dataset & Evaluation Engine](#-dataset--evaluation-engine)
 - [Quickstart Guide](#-quickstart-guide)
-- [Automated Test Suite (183 Tests)](#-automated-test-suite-183-tests)
+- [Automated Test Suite (211 Tests)](#-automated-test-suite-211-tests)
 - [Technical Conventions & Design Decisions](#-technical-conventions--design-decisions)
 - [Limitations & Honest Reporting](#-limitations--honest-reporting)
 
@@ -40,6 +41,7 @@ In continuous manufacturing and industrial plants, unexplained equipment failure
 3. **Deterministic Safety Policy Gatekeeper**: A pure Python safety layer intercepts every tool call and evaluates risk level (`NONE` to `CRITICAL`). All operational recommendations permanently mandate human approval (`requires_approval=True`, `status=PENDING_APPROVAL`).
 4. **Proof-or-Refuse Diagnosis & Self-Auditing**: Deterministic validators assess evidence sufficiency, reject diagnoses based on contradictory evidence or ambiguous root causes, and audit investigation reports directly against SQLite telemetry logs.
 5. **Modular Workforce Intelligence**: Role and certification-based clearance gating (`L1`-`L4`), shift coverage verification, maintenance work orders requiring verified inspector sign-off, and incident correlation.
+6. **Time to Breach Prognostics & Operating Fragility Search**: Estimates threshold crossing horizons ($g(x) \ge 0$) under first, sustained, and persistent crossing policies with analytical uncertainty quantification, while strictly separating physical equipment failure (Taylor tool life equations) from operational boundary breaches. Computes the smallest feasible operating disturbance to reach breach boundaries via exact analytical and bounded coordinate searches.
 
 ---
 
@@ -322,8 +324,31 @@ The backend is built with FastAPI and runs on ASGI server Uvicorn. All endpoints
 | `GET` | `/api/v1/workforce/work-orders/{id}` | Retrieve maintenance work order by ID | `200` |
 | `POST` | `/api/v1/workforce/work-orders/{id}/complete` | Complete work order requiring verified inspector sign-off | `200` |
 | `POST` | `/api/v1/workforce/correlate` | Correlate incident with active workers & maintenance events | `200` |
+| `POST` | `/api/v1/prognostics/forecast` | Estimate time-to-breach for operational/safety threshold | `200` |
+| `POST` | `/api/v1/prognostics/failure-time` | Evaluate physical equipment degradation failure time | `200` |
+| `POST` | `/api/v1/prognostics/benchmark` | Execute deterministic synthetic prognostics benchmark suite | `200` |
+| `POST` | `/api/v1/fragility/search` | Find smallest feasible disturbance Delta x to reach breach | `200` |
+| `POST` | `/api/v1/fragility/sensitivity` | Rank operating variables by fragility / threshold vulnerability | `200` |
+| `POST` | `/api/v1/fragility/benchmark` | Execute deterministic synthetic fragility benchmark suite | `200` |
 
 ---
+
+## 🔮 Prognostics & Fragility Search Subsystems
+
+### Time to Breach Prognostics (`app/plantpilot/prognostics/`)
+- **Threshold Formulation**: Monitors boundary function $g(x) \ge 0$ with safety margin $m(x) = -g(x)$.
+- **Crossing Policies**:
+  - `FIRST_CROSSING`: Earliest instant crossing occurs.
+  - `SUSTAINED_CROSSING`: Breach condition maintained continuously for $\ge \tau_{\text{sustain}}$ seconds.
+  - `PERSISTENT_CROSSING`: Cumulative breach duration $\sum \Delta t \ge T_{\text{crit}}$.
+- **Analytical Uncertainty Quantification**: Computes parameter covariance and delta method confidence intervals $[t_{\text{lower}}, t_{\text{upper}}]$.
+- **Separation of Physical Failure**: Threshold breach is an operational boundary. Physical degradation uses domain equations (Taylor tool life $V \cdot T^n = C$) and refuses estimation with `UNSUPPORTED_TARGET` or `INADEQUATE_EVIDENCE` when parameters are uncalibrated.
+
+### Fragility Search Subsystem (`app/plantpilot/fragility/`)
+- **Cost Formulation**: Minimizes weighted normalized disturbance $\min_{\Delta x} \sum w_i |\Delta x_i / s_i|^p$ subject to $g(x_0 + \Delta x) \ge 0$ and physical constraints ($T_{\text{proc}} \ge T_{\text{air}}$, power bounds).
+- **Exact 1D Optimum**: Closed-form analytical global optimum for monotonic threshold crossing (`VERIFIED_OPTIMUM`).
+- **Multi-Dimensional Bounded Search**: Coordinate descent with line search returning verified feasible candidates (`FEASIBLE_CANDIDATE_FOUND`), `BASELINE_ALREADY_BREACHED`, or `INFEASIBLE`.
+- **Sensitivity Ranking**: Ranks individual operating parameters by normalized disturbance cost.
 
 ## 📊 Dataset & Evaluation Engine
 
@@ -428,9 +453,9 @@ streamlit run app.py
 
 ---
 
-## 🧪 Automated Test Suite (183 Tests)
+## 🧪 Automated Test Suite (211 Tests)
 
-PlantPilot maintains a rigorous automated test suite with **183 passed tests (100% pass rate)** across 20 test modules. Tests cover schema validation, database foreign key constraints, safety policies, label quarantine, tool execution, investigation state tracking, proof-or-refuse validation, next-best-test ranking, and the modular workforce subsystem.
+PlantPilot maintains a rigorous automated test suite with **211 passed tests (100% pass rate)** across 24 test modules. Tests cover schema validation, database foreign key constraints, safety policies, label quarantine, tool execution, investigation state tracking, proof-or-refuse validation, next-best-test ranking, modular workforce intelligence, Time-to-Breach prognostics, physical degradation separation, fragility search optimization, and deterministic benchmarks.
 
 All tests run **100% deterministically without external API dependencies**.
 
@@ -453,12 +478,15 @@ uv run pytest tests/ -v
 | `test_storage.py` | 20 | SQLite schema integrity, FK cascades, junction tables, migrations |
 | `test_tools.py` | 16 | Tool argument schema checks, OpenAI formatting, statistical math, handlers |
 | `test_schemas.py` | 13 | Pydantic v2 data models, default values, serialization, validators |
+| `test_prognostics_fragility_integration.py` | 12 | Tool execution, safety policy permissions, FastAPI endpoints, agent evidence tagging |
 | `test_api.py` | 21 | FastAPI HTTP endpoints, status codes, payload validation |
 | `test_integration_e2e.py` | 11 | End-to-end pipeline with real dataset CSV and tool execution |
 | `test_agent.py` | 9 | Bounded loop steps, tool call limits, provider failure handling |
 | `test_workforce_modular.py` | 9 | Modular workforce (registry, attendance, overnight shifts, maintenance, analytics) |
 | `test_detection.py` | 8 | Supervised ML failure risk inference (GBDT + RF) |
 | `test_workforce.py` | 7 | Legacy workforce store facade, shift tracking, clearance gating |
+| `test_prognostics.py` | 6 | Threshold evaluation $g(x) \ge 0$, drift extrapolation, delta method uncertainty, physical failure separation |
+| `test_fragility.py` | 6 | Smallest disturbance cost optimization, 1D exact optimum, bounded coordinate search, sensitivity ranking |
 | `test_eval_engine.py` | 6 | Stratified splits (70/15/15), label quarantine, baseline metrics |
 | `test_safety.py` | 6 | Tool risk levels (`NONE` to `CRITICAL`), recommendation sign-off checks |
 | `test_diagnostics.py` | 6 | Evidence sufficiency, report claim audits, next-test ranking |
@@ -467,9 +495,10 @@ uv run pytest tests/ -v
 | `test_proof_or_refuse.py` | 5 | Strict proof-or-refuse validator, evidence sufficiency & contradictions |
 | `test_digital_twin.py` | 5 | Digital twin store, telemetry ingestion, isolated simulation |
 | `test_report_auditing.py` | 4 | Self-auditing report claims grounding vs DB records & causality |
+| `test_evaluation_benchmarks.py` | 4 | Deterministic synthetic benchmark suites for prognostics & fragility search with analytical ground truth |
 | `test_next_best_test.py` | 3 | Next-Best-Test ranking, information gain, cost/risk penalty & executable tools |
 | `test_workforce_integration.py` | 2 | Workforce incident correlation & clearance enforcement on critical actions |
-| **Total** | **183** | **100% Passing in ~8.5 seconds** |
+| **Total** | **211** | **100% Passing in ~8.0 seconds** |
 
 ---
 
