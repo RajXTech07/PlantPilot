@@ -292,3 +292,71 @@ def test_agent_build_initial_messages(controller):
     assert "PlantPilot" in messages[0]["content"]
     assert messages[1]["role"] == "user"
     assert "Test incident description" in messages[1]["content"]
+
+
+def test_agent_records_derived_evidence_for_predict_failure_risk(controller, test_db):
+    """Test that predict_failure_risk execution records DERIVED evidence."""
+    from plantpilot.schemas import EvidenceType
+
+    incident = test_db.create_incident(
+        IncidentCreate(description="Overheating suspect on line 4", severity="high")
+    )
+    investigation = test_db.create_investigation(
+        InvestigationCreate(incident_id=incident.id), incident
+    )
+
+    pred_args = {
+        "air_temperature": 298.1,
+        "process_temperature": 308.6,
+        "rotational_speed": 1551.0,
+        "torque": 42.8,
+        "tool_wear": 0.0,
+        "include_secondary": False,
+    }
+    tool_call = _make_tool_call("predict_failure_risk", pred_args)
+
+    mock_client = MockModelClient()
+    mock_client.responses = [
+        mock_client._make_response(tool_calls=[tool_call], finish_reason="tool_calls"),
+        mock_client._make_response(content="Risk assessment completed; failure probability is low.", finish_reason="stop"),
+    ]
+
+    with patch.object(controller, 'client', mock_client):
+        result = controller.investigate(investigation, incident)
+
+    assert result.completed is True
+    assert result.status == Status.COMPLETED
+    assert len(result.evidence_ids) == 1
+
+    loaded = test_db.get_investigation(investigation.id)
+    assert len(loaded.evidence) == 1
+    assert loaded.evidence[0].evidence_type == EvidenceType.DERIVED
+    assert loaded.evidence[0].source == "predict_failure_risk"
+    assert loaded.evidence[0].verified is True
+
+
+def test_agent_investigate_records_diagnostic_verification(controller, test_db):
+    """Test investigation appends evidence verification and next tests to findings."""
+    incident = test_db.create_incident(
+        IncidentCreate(description="Suspected vibration anomaly", severity="medium")
+    )
+    investigation = test_db.create_investigation(
+        InvestigationCreate(incident_id=incident.id), incident
+    )
+
+    tool_call = _make_tool_call("diagnostic_math", {"values": [10.0, 20.0, 30.0]})
+
+    mock_client = MockModelClient()
+    mock_client.responses = [
+        mock_client._make_response(tool_calls=[tool_call], finish_reason="tool_calls"),
+        mock_client._make_response(content="Analysis complete.", finish_reason="stop"),
+    ]
+
+    with patch.object(controller, 'client', mock_client):
+        result = controller.investigate(investigation, incident)
+
+    assert result.completed is True
+    assert result.status == Status.COMPLETED
+    assert any("Evidence Verification:" in f for f in result.findings)
+
+

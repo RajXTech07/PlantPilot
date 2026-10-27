@@ -138,3 +138,35 @@ def test_default_safety_policy():
 
     # Should be permitted
     assert policy.is_tool_permitted("diagnostic_math") is True
+
+    # Test predict_failure_risk
+    pred_risk = policy.get_tool_risk("predict_failure_risk")
+    assert pred_risk is not None
+    assert pred_risk.risk_level == RiskLevel.NONE
+    assert policy.is_tool_permitted("predict_failure_risk") is True
+
+    # Test get_twin_telemetry
+    twin_risk = policy.get_tool_risk("get_twin_telemetry")
+    assert twin_risk is not None
+    assert twin_risk.risk_level == RiskLevel.NONE
+    assert policy.is_tool_permitted("get_twin_telemetry") is True
+
+    # Test assess_evidence_sufficiency
+    diag_risk = policy.get_tool_risk("assess_evidence_sufficiency")
+    assert diag_risk is not None
+    assert diag_risk.risk_level == RiskLevel.NONE
+    assert policy.is_tool_permitted("assess_evidence_sufficiency") is True
+
+    # Test rank_diagnostic_tests
+    rank_risk = policy.get_tool_risk("rank_diagnostic_tests")
+    assert rank_risk is not None
+    assert rank_risk.risk_level == RiskLevel.NONE
+    assert policy.is_tool_permitted("rank_diagnostic_tests") is True
+
+    # Test verify_operator_clearance
+    clr_risk = policy.get_tool_risk("verify_operator_clearance")
+    assert clr_risk is not None
+    assert clr_risk.risk_level == RiskLevel.NONE
+    assert policy.is_tool_permitted("verify_operator_clearance") is True
+
+

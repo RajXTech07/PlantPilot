@@ -189,6 +189,30 @@ class AgentController:
                     self.db.save_hypothesis(investigation.id, hypothesis)
                     hypothesis_ids.append(hypothesis.id)
 
+                    # Phase 3: Deterministic Evidence Sufficiency & Next-Test Ranking
+                    try:
+                        from .diagnostics import assess_diagnosis, rank_next_tests
+                        loaded_inv = self.db.get_investigation(investigation.id)
+                        if loaded_inv:
+                            ev_dicts = [e.model_dump() for e in loaded_inv.evidence]
+                            hyp_dicts = [h.model_dump() for h in loaded_inv.hypotheses]
+                            assessment = assess_diagnosis(ev_dicts, hyp_dicts)
+                            diag_msg = f"Evidence Verification: {assessment['diagnosis_status']} ({assessment['verified_evidence_count']} verified items)"
+                            findings.append(diag_msg)
+
+                            if assessment.get("diagnosis_status") != "SUPPORTED_FOR_REVIEW" or assessment.get("missing_evidence"):
+                                candidate_tests = [
+                                    {"id": "test_vibration_fft", "name": "Spindle bearing vibration FFT scan", "diagnostic_value": 0.85, "cost": 0.2, "safety_risk": 0.05, "available": True, "permitted": True, "distinguishes_hypotheses": hypothesis_ids},
+                                    {"id": "test_oil_tribology", "name": "Lubrication oil tribology analysis", "diagnostic_value": 0.75, "cost": 0.3, "safety_risk": 0.0, "available": True, "permitted": True, "distinguishes_hypotheses": hypothesis_ids},
+                                    {"id": "test_thermal_imaging", "name": "Infrared thermographic hotspot scan", "diagnostic_value": 0.7, "cost": 0.1, "safety_risk": 0.0, "available": True, "permitted": True, "distinguishes_hypotheses": hypothesis_ids},
+                                ]
+                                ranking = rank_next_tests(hyp_dicts, candidate_tests)
+                                if ranking.get("recommended_test"):
+                                    rec_test = ranking["recommended_test"]["name"]
+                                    findings.append(f"Recommended Next Inspection: {rec_test}")
+                    except Exception as diag_err:
+                        self.db.save_audit_event("diagnostic_assessment_error", str(diag_err), {}, investigation.id)
+
                 # Normal completion
                 self.db.save_audit_event(
                     "investigation_complete",
@@ -305,10 +329,16 @@ class AgentController:
                         None,
                         step_index=step,
                     )
-                    # Record as observed evidence with exact provenance link.
+                    # Record evidence with exact provenance link.
+                    # Machine-learning predictive calculations are tagged as DERIVED, while sensor readings are OBSERVED.
+                    ev_type = (
+                        EvidenceType.DERIVED
+                        if tool_name == "predict_failure_risk"
+                        else EvidenceType.OBSERVED
+                    )
                     evidence = EvidenceItem(
                         id=f"ev_{uuid.uuid4().hex[:12]}",
-                        evidence_type=EvidenceType.OBSERVED,
+                        evidence_type=ev_type,
                         description=f"Tool {tool_name} result",
                         source=tool_name,
                         value=result,

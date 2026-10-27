@@ -734,7 +734,42 @@ class Database:
             ),
         )
 
+    def get_recommendation(self, recommendation_id: str) -> Optional[Recommendation]:
+        """Retrieve a single recommendation by ID."""
+        if self._conn is None:
+            raise DatabaseError("Not connected")
+
+        row = self._conn.execute(
+            "SELECT * FROM recommendations WHERE id = ?", (recommendation_id,)
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return Recommendation(
+            id=row["id"],
+            title=row["title"],
+            description=row["description"],
+            requires_approval=bool(row["requires_approval"]),
+            approval_status=ApprovalStatus(row["approval_status"]),
+            priority=row["priority"],
+            reviewed_by=row["reviewed_by"] if "reviewed_by" in row.keys() else None,
+            review_notes=row["review_notes"] if "review_notes" in row.keys() else None,
+            reviewed_at=(
+                datetime.fromisoformat(row["reviewed_at"])
+                if ("reviewed_at" in row.keys() and row["reviewed_at"])
+                else None
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            executed_at=(
+                datetime.fromisoformat(row["executed_at"])
+                if row["executed_at"]
+                else None
+            ),
+        )
+
     def _load_recommendations(self, investigation_id: str) -> List[Recommendation]:
+
         if self._conn is None:
             return []
 

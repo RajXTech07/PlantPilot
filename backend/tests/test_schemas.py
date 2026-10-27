@@ -139,3 +139,149 @@ def test_investigation_result_creation():
     assert result.completed is True
     assert result.steps_taken == 3
     assert len(result.findings) == 2
+
+
+def test_digital_twin_schemas():
+    """Test DigitalTwin and TwinReading schemas."""
+    from plantpilot.schemas import DigitalTwinCreate, DigitalTwin, TwinReadingItem, TwinReadingCreate
+
+    twin_payload = DigitalTwinCreate(name="Milling Unit A", machine_type="M", metadata={"line": 2})
+    assert twin_payload.name == "Milling Unit A"
+    assert twin_payload.machine_type == "M"
+
+    twin = DigitalTwin(
+        id="twin_123",
+        name="Milling Unit A",
+        machine_type="M",
+        metadata={"line": 2},
+        created_at="2026-10-26T12:00:00Z",
+        updated_at="2026-10-26T12:00:00Z",
+        latest_observed_reading=None,
+        observed_reading_count=0,
+    )
+    assert twin.id == "twin_123"
+    assert twin.observed_reading_count == 0
+
+
+def test_failure_risk_prediction_schema():
+    """Test FailureRiskPrediction schema."""
+    from plantpilot.schemas import FailureRiskPrediction, AnomalyEvidence, SecondaryModelResult
+
+    pred = FailureRiskPrediction(
+        model="HistGradientBoostingClassifier",
+        failure_probability=0.85,
+        threshold=0.42,
+        failure_risk="elevated",
+        predicted_failure=True,
+        anomaly_evidence=AnomalyEvidence(
+            flagged_parameters=["rotational_speed_rpm"],
+            detection_methods={"rotational_speed_rpm": "iqr_lower"},
+            explanation="Unusual rotational speed detected",
+        ),
+        secondary_model=SecondaryModelResult(
+            model="RandomForestClassifier",
+            failure_probability=0.81,
+            threshold=0.40,
+            predicted_failure=True,
+        ),
+        model_agreement=True,
+        provenance="AI4I 2020 benchmark dataset",
+    )
+    assert pred.predicted_failure is True
+    assert pred.model_agreement is True
+    assert pred.failure_risk == "elevated"
+
+
+def test_diagnostics_schemas():
+    """Test diagnostics request and response schemas."""
+    from plantpilot.schemas import (
+        DiagnosisAssessRequest,
+        DiagnosisAssessResponse,
+        ReportAuditRequest,
+        ReportAuditResponse,
+        RankTestsRequest,
+        RankTestsResponse,
+    )
+
+    assess_req = DiagnosisAssessRequest(
+        evidence=[{"id": "ev_1", "verified": True}],
+        hypotheses=[{"id": "hyp_1", "supporting_evidence_ids": ["ev_1"]}],
+        required_evidence=["air_temp"],
+    )
+    assert len(assess_req.evidence) == 1
+    assert assess_req.required_evidence == ["air_temp"]
+
+    assess_res = DiagnosisAssessResponse(
+        diagnosis_status="SUPPORTED_FOR_REVIEW",
+        verified_evidence_count=1,
+        missing_evidence=[],
+        hypotheses=[],
+        message="OK",
+    )
+    assert assess_res.diagnosis_status == "SUPPORTED_FOR_REVIEW"
+
+    audit_req = ReportAuditRequest(
+        claims=[{"text": "Claim", "claim_type": "factual", "evidence_ids": ["ev_1"]}],
+        evidence=[{"id": "ev_1", "verified": True}],
+    )
+    assert len(audit_req.claims) == 1
+
+    rank_req = RankTestsRequest(
+        hypotheses=[{"id": "hyp_1"}],
+        available_tests=[{"id": "test_1", "name": "Inspection", "diagnostic_value": 0.8}],
+    )
+    assert len(rank_req.available_tests) == 1
+
+
+def test_workforce_schemas():
+    """Test workforce worker and attendance schemas."""
+    from plantpilot.schemas import (
+        WorkerCreate,
+        WorkerItem,
+        ClockInRequest,
+        ClockOutRequest,
+        AttendanceRecordItem,
+        ClearanceCheckRequest,
+        ClearanceCheckResponse,
+    )
+
+    worker_payload = WorkerCreate(
+        name="Elena Rostova",
+        role="Diagnostics Lead",
+        department="Maintenance",
+        clearance_level="L3",
+    )
+    assert worker_payload.name == "Elena Rostova"
+    assert worker_payload.clearance_level == "L3"
+    assert worker_payload.status == "ACTIVE"
+
+    worker = WorkerItem(
+        worker_id="wrk_123",
+        name="Elena Rostova",
+        role="Diagnostics Lead",
+        department="Maintenance",
+        clearance_level="L3",
+        status="ACTIVE",
+        created_at="2026-10-27T00:00:00Z",
+    )
+    assert worker.worker_id == "wrk_123"
+
+    clock_in = ClockInRequest(
+        worker_id="wrk_123",
+        timestamp="2026-10-27T08:00:00Z",
+        shift_date="2026-10-27",
+        break_minutes=30,
+    )
+    assert clock_in.break_minutes == 30
+
+    check_res = ClearanceCheckResponse(
+        worker_id="wrk_123",
+        actual_clearance="L3",
+        required_clearance="L2",
+        authorized_by_clearance=True,
+        status="AUTHORIZED",
+        requires_human_review=False,
+    )
+    assert check_res.authorized_by_clearance is True
+
+

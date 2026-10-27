@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -22,8 +22,33 @@ from .schemas import (
     Machine,
     MachineCreate,
     Recommendation,
+    DigitalTwin,
+    DigitalTwinCreate,
+    TwinReadingItem,
+    TwinReadingCreate,
+    TwinSimulationRequest,
+    FailureRiskPrediction,
+    DiagnosisAssessRequest,
+    DiagnosisAssessResponse,
+    ReportAuditRequest,
+    ReportAuditResponse,
+    RankTestsRequest,
+    RankTestsResponse,
+    WorkerCreate,
+    WorkerItem,
+    ClockInRequest,
+    ClockOutRequest,
+    AttendanceRecordItem,
+    ClearanceCheckRequest,
+    ClearanceCheckResponse,
+    WorkforceAnomaliesRequest,
+    WorkforceFindingsResponse,
+    WorkforceReviewResponse,
 )
 from .storage import get_database
+from .diagnostics import assess_diagnosis, audit_report, rank_next_tests
+from .workforce import get_workforce_store, model_assess_workforce
+
 
 
 class RecommendationReviewRequest(BaseModel):
@@ -287,6 +312,30 @@ async def review_recommendation(
     """Operator sign-off: Approve or reject an AI investigation recommendation."""
     try:
         db = get_database()
+        rec = db.get_recommendation(recommendation_id)
+        if rec is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Recommendation {recommendation_id!r} not found",
+            )
+
+        # Clearance gating: If reviewer is a registered worker, enforce clearance requirements for approval
+        if review.status_choice == ApprovalStatus.APPROVED:
+            store = get_workforce_store()
+            worker = store.get_worker(review.reviewed_by)
+            if worker:
+                priority_levels = {"critical": "L3", "high": "L2", "medium": "L1", "low": "L1"}
+                req_level = priority_levels.get(str(rec.priority).lower(), "L1")
+                chk = store.clearance_check(worker["worker_id"], req_level)
+                if not chk["authorized_by_clearance"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=(
+                            f"Worker {worker['worker_id']} has clearance {worker['clearance_level']}, "
+                            f"but {req_level} is required to approve {rec.priority.upper()} priority recommendation."
+                        ),
+                    )
+
         updated = db.review_recommendation(
             recommendation_id=recommendation_id,
             approval_status=review.status_choice,
@@ -299,6 +348,7 @@ async def review_recommendation(
                 detail=f"Recommendation {recommendation_id!r} not found",
             )
         return updated
+
     except HTTPException:
         raise
     except Exception as exc:
@@ -322,6 +372,401 @@ async def list_recommendations(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list recommendations: {type(exc).__name__}",
+        )
+
+
+class PredictRiskRequest(BaseModel):
+    """Payload to request standalone ML failure risk inference."""
+    reading: Dict[str, Any] = Field(..., description="Sensor readings map")
+    include_secondary: bool = Field(True, description="Whether to include secondary Random Forest model")
+
+
+@app.post("/api/v1/twins", response_model=DigitalTwin, status_code=status.HTTP_201_CREATED)
+async def create_digital_twin(create: DigitalTwinCreate) -> DigitalTwin:
+    """Register a new digital twin software asset."""
+    try:
+        from .digital_twin import get_twin_store
+        store = get_twin_store()
+        twin = store.create(create.name, create.machine_type, create.metadata)
+        return DigitalTwin(**twin)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create digital twin: {type(exc).__name__}: {exc}",
+        )
+
+
+@app.get("/api/v1/twins", response_model=List[DigitalTwin])
+async def list_digital_twins(limit: int = 50) -> List[DigitalTwin]:
+    """List registered digital twins with their latest observed readings."""
+    try:
+        from .digital_twin import get_twin_store
+        store = get_twin_store()
+        twins = store.list(limit=limit)
+        return [DigitalTwin(**t) for t in twins]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list digital twins: {type(exc).__name__}: {exc}",
+        )
+
+
+@app.get("/api/v1/twins/{twin_id}", response_model=DigitalTwin)
+async def get_digital_twin(twin_id: str) -> DigitalTwin:
+    """Retrieve details and latest observed telemetry for a digital twin."""
+    try:
+        from .digital_twin import get_twin_store
+        store = get_twin_store()
+        twin = store.get(twin_id)
+        if not twin:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Digital twin {twin_id!r} not found",
+            )
+        return DigitalTwin(**twin)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get digital twin: {type(exc).__name__}: {exc}",
+        )
+
+
+@app.get("/api/v1/twins/{twin_id}/history", response_model=List[TwinReadingItem])
+async def get_twin_history(twin_id: str, limit: int = 100) -> List[TwinReadingItem]:
+    """Retrieve telemetry reading history (both observed and simulated)."""
+    try:
+        from .digital_twin import get_twin_store
+        store = get_twin_store()
+        history = store.history(twin_id, limit=limit)
+        if history is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Digital twin {twin_id!r} not found",
+            )
+        return [TwinReadingItem(**r) for r in history]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get twin history: {type(exc).__name__}: {exc}",
+        )
+
+
+@app.post("/api/v1/twins/{twin_id}/readings", response_model=TwinReadingItem, status_code=status.HTTP_201_CREATED)
+async def add_twin_reading(twin_id: str, payload: TwinReadingCreate) -> TwinReadingItem:
+    """Ingest sensor reading onto a digital twin with automated ML risk assessment."""
+    try:
+        from .digital_twin import get_twin_store
+        from .detection import predict
+        store = get_twin_store()
+        twin = store.get(twin_id)
+        if not twin:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Digital twin {twin_id!r} not found",
+            )
+        
+        assessment = payload.assessment
+        if assessment is None:
+            assessment = predict(payload.reading, include_secondary=True)
+            
+        rec = store.add_reading(
+            twin_id=twin_id,
+            reading=payload.reading,
+            assessment=assessment,
+            evidence_type=payload.evidence_type or "observed",
+        )
+        if rec is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Digital twin {twin_id!r} not found",
+            )
+        return TwinReadingItem(**rec)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid reading data: {exc}",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to ingest twin reading: {type(exc).__name__}: {exc}",
+        )
+
+
+@app.post("/api/v1/twins/{twin_id}/simulate", response_model=TwinReadingItem)
+async def simulate_twin_reading(twin_id: str, request: TwinSimulationRequest) -> TwinReadingItem:
+    """Run an isolated what-if operational simulation on a digital twin."""
+    try:
+        from .digital_twin import get_twin_store
+        from .detection import predict
+        store = get_twin_store()
+        twin = store.get(twin_id)
+        if not twin:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Digital twin {twin_id!r} not found",
+            )
+        
+        assessment = predict(request.reading, include_secondary=request.include_secondary)
+        rec = store.add_reading(
+            twin_id=twin_id,
+            reading=request.reading,
+            assessment=assessment,
+            evidence_type="simulated",
+        )
+        if rec is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Digital twin {twin_id!r} not found",
+            )
+        return TwinReadingItem(**rec)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid simulation reading: {exc}",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Simulation failed: {type(exc).__name__}: {exc}",
+        )
+
+
+@app.post("/api/v1/predict-risk", response_model=FailureRiskPrediction)
+async def predict_risk_endpoint(request: PredictRiskRequest) -> FailureRiskPrediction:
+    """Predict failure probability and statistical anomaly evidence for sensor measurements."""
+    try:
+        from .detection import predict
+        assessment = predict(request.reading, include_secondary=request.include_secondary)
+        return FailureRiskPrediction(**assessment)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid sensor measurements: {exc}",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failure risk prediction failed: {type(exc).__name__}: {exc}",
+        )
+
+
+# =========================================================
+# Diagnostics Endpoints
+# =========================================================
+
+@app.post("/api/v1/diagnostics/assess", response_model=DiagnosisAssessResponse)
+async def assess_diagnosis_endpoint(request: DiagnosisAssessRequest) -> DiagnosisAssessResponse:
+    """Assess evidence sufficiency against hypotheses deterministically."""
+    try:
+        result = assess_diagnosis(
+            evidence=request.evidence,
+            hypotheses=request.hypotheses,
+            required_evidence=request.required_evidence,
+        )
+        return DiagnosisAssessResponse(**result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Diagnosis assessment failed: {exc}",
+        )
+
+
+@app.post("/api/v1/diagnostics/audit-report", response_model=ReportAuditResponse)
+async def audit_report_endpoint(request: ReportAuditRequest) -> ReportAuditResponse:
+    """Audit narrative or numeric claims against verified evidence records."""
+    try:
+        result = audit_report(claims=request.claims, evidence=request.evidence)
+        return ReportAuditResponse(**result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Report audit failed: {exc}",
+        )
+
+
+@app.post("/api/v1/diagnostics/rank-tests", response_model=RankTestsResponse)
+async def rank_tests_endpoint(request: RankTestsRequest) -> RankTestsResponse:
+    """Rank next candidate diagnostic or physical inspection tests."""
+    try:
+        result = rank_next_tests(
+            hypotheses=request.hypotheses,
+            available_tests=request.available_tests,
+        )
+        return RankTestsResponse(**result)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Test ranking failed: {exc}",
+        )
+
+
+# =========================================================
+# Workforce Endpoints
+# =========================================================
+
+@app.post("/api/v1/workforce/workers", status_code=status.HTTP_201_CREATED, response_model=WorkerItem)
+async def create_worker_endpoint(payload: WorkerCreate) -> WorkerItem:
+    """Register a new plant worker or technician."""
+    try:
+        store = get_workforce_store()
+        worker = store.create_worker(payload.model_dump())
+        return WorkerItem(**worker)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create worker: {exc}",
+        )
+
+
+@app.get("/api/v1/workforce/workers", response_model=List[WorkerItem])
+async def list_workers_endpoint(limit: int = 100) -> List[WorkerItem]:
+    """List registered workforce personnel."""
+    store = get_workforce_store()
+    workers = store.list_workers(limit=limit)
+    return [WorkerItem(**w) for w in workers]
+
+
+@app.get("/api/v1/workforce/workers/{worker_id}", response_model=WorkerItem)
+async def get_worker_endpoint(worker_id: str) -> WorkerItem:
+    """Get worker details by worker_id."""
+    store = get_workforce_store()
+    worker = store.get_worker(worker_id)
+    if not worker:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Worker {worker_id!r} not found",
+        )
+    return WorkerItem(**worker)
+
+
+@app.post("/api/v1/workforce/clock-in", status_code=status.HTTP_201_CREATED, response_model=AttendanceRecordItem)
+async def clock_in_endpoint(request: ClockInRequest) -> AttendanceRecordItem:
+    """Clock in a worker for an operational shift."""
+    store = get_workforce_store()
+    try:
+        record = store.clock_in(
+            worker_id=request.worker_id,
+            timestamp=request.timestamp,
+            shift_date=request.shift_date,
+            break_minutes=request.break_minutes or 0,
+        )
+        return AttendanceRecordItem(**record)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Clock-in failed: {exc}",
+        )
+
+
+@app.post("/api/v1/workforce/clock-out", response_model=AttendanceRecordItem)
+async def clock_out_endpoint(request: ClockOutRequest) -> AttendanceRecordItem:
+    """Clock out a worker from an active shift."""
+    store = get_workforce_store()
+    try:
+        record = store.clock_out(
+            worker_id=request.worker_id,
+            timestamp=request.timestamp,
+        )
+        return AttendanceRecordItem(**record)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Clock-out failed: {exc}",
+        )
+
+
+@app.get("/api/v1/workforce/workers/{worker_id}/attendance", response_model=List[AttendanceRecordItem])
+async def worker_attendance_endpoint(worker_id: str, limit: int = 100) -> List[AttendanceRecordItem]:
+    """Get attendance history for a specific worker."""
+    store = get_workforce_store()
+    try:
+        records = store.attendance(worker_id, limit=limit)
+        return [AttendanceRecordItem(**r) for r in records]
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+
+@app.post("/api/v1/workforce/clearance-check", response_model=ClearanceCheckResponse)
+async def clearance_check_endpoint(request: ClearanceCheckRequest) -> ClearanceCheckResponse:
+    """Verify worker clearance authorization level."""
+    store = get_workforce_store()
+    try:
+        result = store.clearance_check(
+            worker_id=request.worker_id,
+            required_level=request.required_level,
+        )
+        return ClearanceCheckResponse(**result)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+
+@app.post("/api/v1/workforce/detect-anomalies", response_model=WorkforceFindingsResponse)
+async def detect_workforce_anomalies_endpoint(request: Optional[WorkforceAnomaliesRequest] = None) -> WorkforceFindingsResponse:
+    """Run deterministic workforce anomaly detection (missing clock-out, excessive hours, duplicates)."""
+    store = get_workforce_store()
+    max_shift = request.max_shift_hours if request and request.max_shift_hours else 12.0
+    findings = store.detect(max_shift_hours=max_shift)
+    return WorkforceFindingsResponse(**findings)
+
+
+@app.post("/api/v1/workforce/model-review", response_model=WorkforceReviewResponse)
+async def model_review_workforce_endpoint(request: Optional[WorkforceAnomaliesRequest] = None) -> WorkforceReviewResponse:
+    """Run deterministic anomaly detection followed by model-assisted review."""
+    try:
+        store = get_workforce_store()
+        max_shift = request.max_shift_hours if request and request.max_shift_hours else 12.0
+        deterministic_findings = store.detect(max_shift_hours=max_shift)
+        review = model_assess_workforce(deterministic_findings)
+        return WorkforceReviewResponse(**review)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Model-assisted review failed: {exc}",
         )
 
 

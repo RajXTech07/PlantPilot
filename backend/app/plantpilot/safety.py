@@ -146,4 +146,44 @@ def default_safety_policy() -> SafetyPolicy:
             description="Harmless deterministic math on caller-provided numbers",
         )
     )
-    return policy
+    policy.register_tool_risk(
+        ToolRisk(
+            name="predict_failure_risk",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Machine learning failure risk prediction and statistical anomaly assessment - read-only",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="get_twin_telemetry",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Retrieve digital twin status and historical telemetry snapshots - read-only",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="assess_evidence_sufficiency",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Evaluate evidence sufficiency against hypotheses - read-only deterministic",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="rank_diagnostic_tests",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Multi-criteria candidate diagnostic test ranking - read-only deterministic",
+        )
+    )
+    policy.register_tool_risk(
+        ToolRisk(
+            name="verify_operator_clearance",
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            description="Verify worker operational clearance level - read-only deterministic",
+        )
+    )
+    return policy

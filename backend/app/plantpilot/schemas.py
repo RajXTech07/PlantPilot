@@ -228,3 +228,260 @@ class InvestigationResult(BaseModel):
     steps_taken: int = Field(0, ge=0)
     completed: bool = Field(False)
 
+
+class DigitalTwinCreate(BaseModel):
+    """Payload to register a software digital twin."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., min_length=1, max_length=200, description="Twin identifier name")
+    machine_type: str = Field(..., min_length=1, max_length=50, description="Machine type (L, M, H, etc.)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Custom metadata attributes")
+
+
+class TwinReadingItem(BaseModel):
+    """A recorded telemetry snapshot on a digital twin."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(...)
+    twin_id: str = Field(...)
+    reading: Dict[str, Any] = Field(...)
+    assessment: Dict[str, Any] = Field(default_factory=dict)
+    evidence_type: str = Field("observed", description="observed, simulated, or derived")
+    created_at: str = Field(...)
+
+
+class DigitalTwin(BaseModel):
+    """Digital twin representation of a machine asset."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(...)
+    name: str = Field(...)
+    machine_type: str = Field(...)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(...)
+    updated_at: str = Field(...)
+    latest_observed_reading: Optional[TwinReadingItem] = Field(None)
+    observed_reading_count: int = Field(0, ge=0)
+
+
+class TwinReadingCreate(BaseModel):
+    """Payload to push telemetry onto a digital twin."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    reading: Dict[str, Any] = Field(..., description="Measurement map (e.g. air_temperature_k, rotational_speed_rpm)")
+    assessment: Optional[Dict[str, Any]] = Field(None, description="Optional pre-computed risk assessment")
+    evidence_type: Optional[str] = Field("observed", description="observed vs simulated")
+
+
+class TwinSimulationRequest(BaseModel):
+    """Payload to run what-if simulation on a digital twin."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    reading: Dict[str, Any] = Field(..., description="Hypothetical operational readings")
+    include_secondary: bool = Field(True, description="Whether to include secondary Random Forest consensus")
+
+
+class AnomalyEvidence(BaseModel):
+    """Statistical anomaly detection signals."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    flagged_parameters: List[str] = Field(default_factory=list)
+    detection_methods: Dict[str, str] = Field(default_factory=dict)
+    explanation: str = Field(...)
+
+
+class SecondaryModelResult(BaseModel):
+    """Secondary consensus model prediction."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: str = Field(...)
+    failure_probability: float = Field(...)
+    threshold: float = Field(...)
+    predicted_failure: bool = Field(...)
+
+
+class FailureRiskPrediction(BaseModel):
+    """ML failure risk prediction and statistical anomaly assessment."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    model: str = Field(...)
+    failure_probability: float = Field(...)
+    threshold: float = Field(...)
+    failure_risk: str = Field(...)
+    predicted_failure: bool = Field(...)
+    anomaly_evidence: AnomalyEvidence = Field(...)
+    secondary_model: Optional[SecondaryModelResult] = Field(None)
+    model_agreement: Optional[bool] = Field(None)
+    provenance: str = Field(...)
+
+
+# ---------------------------------------------------------
+# Diagnostics Schemas
+# ---------------------------------------------------------
+
+class DiagnosisAssessRequest(BaseModel):
+    """Payload to assess evidence sufficiency for hypotheses."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    evidence: List[Dict[str, Any]] = Field(..., description="Observed and derived evidence items")
+    hypotheses: List[Dict[str, Any]] = Field(..., description="Hypotheses to evaluate against evidence")
+    required_evidence: Optional[List[str]] = Field(None, description="Optional required evidence keywords")
+
+
+class DiagnosisAssessResponse(BaseModel):
+    """Result of deterministic evidence sufficiency assessment."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    diagnosis_status: str = Field(..., description="SUPPORTED_FOR_REVIEW or INCONCLUSIVE")
+    verified_evidence_count: int = Field(..., ge=0)
+    missing_evidence: List[str] = Field(default_factory=list)
+    hypotheses: List[Dict[str, Any]] = Field(default_factory=list)
+    message: str = Field(...)
+
+
+class ReportAuditRequest(BaseModel):
+    """Payload to audit investigation narrative claims against evidence."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    claims: List[Dict[str, Any]] = Field(..., description="Claims to audit")
+    evidence: List[Dict[str, Any]] = Field(..., description="Underlying verified evidence items")
+
+
+class ReportAuditResponse(BaseModel):
+    """Result of report claim auditing against evidence records."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: str = Field(..., description="VERIFIED or REVIEW_REQUIRED")
+    claims_checked: int = Field(..., ge=0)
+    supported_claims: int = Field(..., ge=0)
+    claims: List[Dict[str, Any]] = Field(default_factory=list)
+    note: str = Field(...)
+
+
+class RankTestsRequest(BaseModel):
+    """Payload to rank next diagnostic or physical candidate tests."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    hypotheses: List[Dict[str, Any]] = Field(..., description="Current unresolved hypotheses")
+    available_tests: List[Dict[str, Any]] = Field(..., description="Candidate tests to evaluate")
+
+
+class RankTestsResponse(BaseModel):
+    """Result of multi-criteria diagnostic test ranking."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    recommended_test: Optional[Dict[str, Any]] = Field(None)
+    ranked_tests: List[Dict[str, Any]] = Field(default_factory=list)
+    unresolved_hypotheses: List[Any] = Field(default_factory=list)
+    note: str = Field(...)
+
+
+# ---------------------------------------------------------
+# Workforce & Clearance Schemas
+# ---------------------------------------------------------
+
+class WorkerCreate(BaseModel):
+    """Payload to register an industrial worker or technician."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., min_length=1, max_length=200)
+    role: str = Field(..., min_length=1, max_length=100)
+    department: str = Field(..., min_length=1, max_length=100)
+    clearance_level: str = Field(..., description="L1, L2, L3, or L4")
+    worker_id: Optional[str] = Field(None, max_length=50)
+    status: Optional[str] = Field("ACTIVE", description="ACTIVE or INACTIVE")
+
+
+class WorkerItem(BaseModel):
+    """Industrial personnel record."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(...)
+    name: str = Field(...)
+    role: str = Field(...)
+    department: str = Field(...)
+    clearance_level: str = Field(...)
+    status: str = Field(...)
+    created_at: str = Field(...)
+
+
+class ClockInRequest(BaseModel):
+    """Payload to record worker shift start."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(...)
+    timestamp: str = Field(..., description="ISO-8601 clock-in timestamp")
+    shift_date: str = Field(..., description="YYYY-MM-DD shift date")
+    break_minutes: Optional[int] = Field(0, ge=0, le=1440)
+
+
+class ClockOutRequest(BaseModel):
+    """Payload to record worker shift end."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(...)
+    timestamp: str = Field(..., description="ISO-8601 clock-out timestamp")
+
+
+class AttendanceRecordItem(BaseModel):
+    """Shift attendance record."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    record_id: str = Field(...)
+    worker_id: str = Field(...)
+    shift_date: str = Field(...)
+    clock_in: str = Field(...)
+    clock_out: Optional[str] = Field(None)
+    break_minutes: int = Field(0, ge=0)
+    working_hours: Optional[float] = Field(None)
+    attendance_status: str = Field(..., description="OPEN or COMPLETE")
+    created_at: str = Field(...)
+
+
+class ClearanceCheckRequest(BaseModel):
+    """Payload to verify worker operational clearance level."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(...)
+    required_level: str = Field(..., description="Required clearance: L1, L2, L3, or L4")
+
+
+class ClearanceCheckResponse(BaseModel):
+    """Result of clearance authorization check."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_id: str = Field(...)
+    actual_clearance: str = Field(...)
+    required_clearance: str = Field(...)
+    authorized_by_clearance: bool = Field(...)
+    status: str = Field(...)
+    requires_human_review: bool = Field(...)
+
+
+class WorkforceAnomaliesRequest(BaseModel):
+    """Payload to trigger deterministic workforce anomaly detection."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    max_shift_hours: Optional[float] = Field(12.0, ge=1.0, le=24.0)
+
+
+class WorkforceFindingsResponse(BaseModel):
+    """Deterministic workforce review findings."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    finding_count: int = Field(..., ge=0)
+    findings: List[Dict[str, Any]] = Field(default_factory=list)
+    analysis_mode: str = Field(...)
+    note: str = Field(...)
+
+
+class WorkforceReviewResponse(BaseModel):
+    """Model-assisted workforce review response."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    analysis_mode: str = Field(...)
+    deterministic_findings: Dict[str, Any] = Field(...)
+    model_review: Dict[str, Any] = Field(...)
+
+
+

@@ -223,6 +223,84 @@ def _diagnostic_math_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _predict_failure_risk_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .detection import predict
+    reading = {
+        "air_temperature_k": arguments["air_temperature"],
+        "process_temperature_k": arguments["process_temperature"],
+        "rotational_speed_rpm": arguments["rotational_speed"],
+        "torque_nm": arguments["torque"],
+        "tool_wear_min": arguments["tool_wear"],
+    }
+    include_secondary = bool(arguments.get("include_secondary", True))
+    try:
+        return predict(reading, include_secondary=include_secondary)
+    except Exception as exc:
+        raise ToolError(f"Prediction inference failed: {exc}")
+
+
+def _twin_telemetry_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .digital_twin import get_twin_store
+    twin_id = str(arguments["twin_id"]).strip()
+    if not twin_id:
+        raise ToolError("twin_id cannot be empty")
+    limit = int(arguments.get("limit", 10))
+    if limit <= 0:
+        raise ToolError("limit must be a positive integer")
+    store = get_twin_store()
+    twin = store.get(twin_id)
+    if not twin:
+        raise ToolError(f"Digital twin {twin_id!r} not found")
+    history = store.history(twin_id, limit=limit) or []
+    return {
+        "twin_id": twin["id"],
+        "name": twin["name"],
+        "machine_type": twin["machine_type"],
+        "metadata": twin["metadata"],
+        "created_at": twin["created_at"],
+        "updated_at": twin["updated_at"],
+        "observed_reading_count": twin["observed_reading_count"],
+        "latest_observed_reading": twin["latest_observed_reading"],
+        "recent_history": history,
+    }
+
+
+def _assess_evidence_sufficiency_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .diagnostics import assess_diagnosis
+    evidence = arguments.get("evidence", [])
+    hypotheses = arguments.get("hypotheses", [])
+    required = arguments.get("required_evidence")
+    try:
+        return assess_diagnosis(evidence=evidence, hypotheses=hypotheses, required_evidence=required)
+    except Exception as exc:
+        raise ToolError(f"Evidence sufficiency assessment failed: {exc}")
+
+
+def _rank_diagnostic_tests_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .diagnostics import rank_next_tests
+    hypotheses = arguments.get("hypotheses", [])
+    available_tests = arguments.get("available_tests", [])
+    try:
+        return rank_next_tests(hypotheses=hypotheses, available_tests=available_tests)
+    except Exception as exc:
+        raise ToolError(f"Diagnostic test ranking failed: {exc}")
+
+
+def _verify_operator_clearance_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    from .workforce import get_workforce_store
+    worker_id = str(arguments["worker_id"]).strip()
+    required_level = str(arguments["required_level"]).strip().upper()
+    try:
+        store = get_workforce_store()
+        return store.clearance_check(worker_id=worker_id, required_level=required_level)
+    except LookupError as exc:
+        raise ToolError(str(exc))
+    except ValueError as exc:
+        raise ToolError(str(exc))
+    except Exception as exc:
+        raise ToolError(f"Clearance check failed: {exc}")
+
+
 def _build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -286,8 +364,192 @@ def _build_default_registry() -> ToolRegistry:
             max_input_bytes=4000,
         )
     )
+
+    # Supervised ML failure-risk prediction + statistical anomaly evidence
+    registry.register(
+        Tool(
+            name="predict_failure_risk",
+            description=(
+                "Predict machine failure risk and evaluate multi-signal statistical anomaly evidence "
+                "using supervised machine learning (HistGradientBoosting + RandomForest) trained on the AI4I 2020 dataset. "
+                "Requires numeric parameters: air_temperature (K), process_temperature (K), rotational_speed (rpm), torque (Nm), tool_wear (min)."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_predict_failure_risk_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "air_temperature": {
+                        "type": "number",
+                        "description": "Air temperature in Kelvin [K] (e.g. 298.1).",
+                    },
+                    "process_temperature": {
+                        "type": "number",
+                        "description": "Process temperature in Kelvin [K] (e.g. 308.6).",
+                    },
+                    "rotational_speed": {
+                        "type": "number",
+                        "description": "Rotational speed in RPM [rpm] (e.g. 1551).",
+                    },
+                    "torque": {
+                        "type": "number",
+                        "description": "Torque in Newton-meters [Nm] (e.g. 42.8).",
+                    },
+                    "tool_wear": {
+                        "type": "number",
+                        "description": "Tool wear in minutes [min] (e.g. 0).",
+                    },
+                    "include_secondary": {
+                        "type": "boolean",
+                        "description": "Whether to run secondary Random Forest classifier for cross-model consensus (default true).",
+                    },
+                },
+                "required": [
+                    "air_temperature",
+                    "process_temperature",
+                    "rotational_speed",
+                    "torque",
+                    "tool_wear",
+                ],
+                "additionalProperties": False,
+            },
+            max_input_bytes=4000,
+        )
+    )
+
+    # Digital twin telemetry retrieval
+    registry.register(
+        Tool(
+            name="get_twin_telemetry",
+            description=(
+                "Retrieve current operational status, latest observed telemetry reading, "
+                "and recent telemetry history for a machine digital twin by twin_id."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_twin_telemetry_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "twin_id": {
+                        "type": "string",
+                        "description": "Unique identifier of the digital twin (e.g. 'twin_abc123').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of recent telemetry history records to return (default 10).",
+                    },
+                },
+                "required": ["twin_id"],
+                "additionalProperties": False,
+            },
+            max_input_bytes=2000,
+        )
+    )
+
+    # Deterministic evidence sufficiency assessment
+    registry.register(
+        Tool(
+            name="assess_evidence_sufficiency",
+            description=(
+                "Deterministically evaluate whether gathered evidence sufficiently supports "
+                "hypotheses and satisfies required evidence criteria before completing an investigation."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_assess_evidence_sufficiency_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "evidence": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "List of evidence records to verify against hypotheses.",
+                    },
+                    "hypotheses": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "List of hypotheses to evaluate.",
+                    },
+                    "required_evidence": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of required evidence keywords or parameters.",
+                    },
+                },
+                "required": ["evidence", "hypotheses"],
+                "additionalProperties": False,
+            },
+            max_input_bytes=4000,
+        )
+    )
+
+    # Multi-criteria candidate diagnostic test ranking
+    registry.register(
+        Tool(
+            name="rank_diagnostic_tests",
+            description=(
+                "Rank candidate diagnostic or physical inspection tests according to diagnostic value, "
+                "relevance to unresolved hypotheses, operational cost, and safety risk."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_rank_diagnostic_tests_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "hypotheses": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Current unresolved or evaluated hypotheses.",
+                    },
+                    "available_tests": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "List of candidate tests with diagnostic_value, cost, and safety_risk.",
+                    },
+                },
+                "required": ["hypotheses", "available_tests"],
+                "additionalProperties": False,
+            },
+            max_input_bytes=4000,
+        )
+    )
+
+    # Worker clearance level verification
+    registry.register(
+        Tool(
+            name="verify_operator_clearance",
+            description=(
+                "Verify whether an industrial worker or technician holds the necessary clearance level "
+                "(L1, L2, L3, L4) to review or execute maintenance operations."
+            ),
+            risk_level=RiskLevel.NONE,
+            requires_approval=False,
+            handler=_verify_operator_clearance_handler,
+            argument_schema={
+                "type": "object",
+                "properties": {
+                    "worker_id": {
+                        "type": "string",
+                        "description": "Unique identifier of the worker or technician.",
+                    },
+                    "required_level": {
+                        "type": "string",
+                        "enum": ["L1", "L2", "L3", "L4"],
+                        "description": "Minimum required clearance level (L1, L2, L3, or L4).",
+                    },
+                },
+                "required": ["worker_id", "required_level"],
+                "additionalProperties": False,
+            },
+            max_input_bytes=2000,
+        )
+    )
     return registry
 
 
 # Module-level default registry used by the app and tests.
 registered_tools = _build_default_registry()
+

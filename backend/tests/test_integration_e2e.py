@@ -213,3 +213,91 @@ def test_completion_requires_evidence_not_just_success(integration_db):
         result = agent.investigate(inv, inc)
     assert result.completed is False  # not complete without evidence/reasoning
     assert result.status.value == "incomplete"
+
+
+def test_full_digital_twin_ml_investigation_lifecycle(integration_db):
+    """End-to-End integration test covering twin telemetry, ML inference, investigation, and review."""
+    from plantpilot.digital_twin import get_twin_store
+    from plantpilot.schemas import MachineCreate, EvidenceType, ApprovalStatus
+
+    # 1. Register physical machine and digital twin
+    mach = integration_db.create_machine(MachineCreate(product_id="M14860", type="M", status="active"))
+    store = get_twin_store()
+    twin = store.create("Spindle Milling Twin 01", "M", {"machine_id": mach.id})
+
+    # 2. Push observed telemetry reading with automated risk assessment
+    reading_payload = {
+        "air_temperature_k": 302.5,
+        "process_temperature_k": 312.0,
+        "rotational_speed_rpm": 1280.0,
+        "torque_nm": 68.5,
+        "tool_wear_min": 215.0,
+    }
+    from plantpilot.detection import predict
+    assessment = predict(reading_payload, include_secondary=True)
+    store.add_reading(twin["id"], reading_payload, assessment, evidence_type="observed")
+
+    # 3. Create incident linked to the asset
+    inc = integration_db.create_incident(
+        IncidentCreate(
+            description=f"Automated alert: High torque and tool wear degradation on {mach.id}",
+            severity="high",
+            category="degradation",
+            machine_id=mach.id,
+            metadata={"twin_id": twin["id"]},
+        )
+    )
+    inv = integration_db.create_investigation(InvestigationCreate(incident_id=inc.id), inc)
+
+    # 4. Agent investigates using both get_twin_telemetry and predict_failure_risk tools
+    agent = AgentController(
+        db=integration_db,
+        tool_registry=registered_tools,
+        safety_policy=default_safety_policy(),
+    )
+    mock_client = Mock()
+
+    # Step 0: Model inspects twin telemetry
+    tc_twin = _make_tc("get_twin_telemetry", {"twin_id": twin["id"]})
+    # Step 1: Model verifies failure risk calculation
+    tc_pred = _make_tc("predict_failure_risk", {
+        "air_temperature": 302.5,
+        "process_temperature": 312.0,
+        "rotational_speed": 1280.0,
+        "torque": 68.5,
+        "tool_wear": 215.0,
+        "include_secondary": True,
+    })
+
+    mock_client.chat.completions.create.side_effect = [
+        _make_resp(tool_calls=[tc_twin], finish="tool_calls"),
+        _make_resp(tool_calls=[tc_pred], finish="tool_calls"),
+        _make_resp(content="Diagnosis confirmed: Elevated failure risk and tool wear exceedance require tool change.", finish="stop"),
+    ]
+
+    with patch.object(agent, "client", mock_client):
+        result = agent.investigate(inv, inc)
+
+    # 5. Verify investigation outcome and evidence provenance
+    assert result.completed is True
+    assert result.status.value == "completed"
+    assert len(result.evidence_ids) == 2
+    assert len(result.hypothesis_ids) == 1
+    assert len(result.recommendation_ids) == 1
+
+    loaded_inv = integration_db.get_investigation(inv.id)
+    ev_types = {e.source: e.evidence_type for e in loaded_inv.evidence}
+    assert ev_types["get_twin_telemetry"] == EvidenceType.OBSERVED
+    assert ev_types["predict_failure_risk"] == EvidenceType.DERIVED
+
+    # 6. Verify human-in-the-loop recommendation review
+    rec_id = result.recommendation_ids[0]
+    reviewed = integration_db.review_recommendation(
+        recommendation_id=rec_id,
+        approval_status=ApprovalStatus.APPROVED,
+        reviewed_by="supervisor_dave",
+        review_notes="Approved immediate tool replacement on Bay 2",
+    )
+    assert reviewed.approval_status == ApprovalStatus.APPROVED
+    assert reviewed.reviewed_by == "supervisor_dave"
+
